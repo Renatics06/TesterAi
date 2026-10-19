@@ -1,0 +1,14 @@
+{
+    "name": "Renatics06.Test.Editor.Tests",
+    "references": [
+        "Renatics06.Test.Editor",
+        "Renatics06.Test"
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": []
+}

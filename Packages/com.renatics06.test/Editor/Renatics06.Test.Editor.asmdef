@@ -1,0 +1,10 @@
+{
+    "name": "Renatics06.Test.Editor",
+    "references": [
+      "Renatics06.Test"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": []
+}

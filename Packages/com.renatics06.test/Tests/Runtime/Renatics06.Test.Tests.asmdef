@@ -1,0 +1,11 @@
+{
+    "name": "Renatics06.Test.Tests",
+    "references": [
+        "Renatics06.Test"
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": []
+}

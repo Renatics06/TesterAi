@@ -8,10 +8,15 @@ public class ItemInspector : MonoBehaviour
     public CameraLook cameraController;
 
     [Header("Параметры")]
-    public float rayDistance = 4f;
     public float moveSpeed = 10f;
     public float rotateSpeed = 0.2f;
     public float panSpeed = 0.0015f;
+
+    [Header("Параметры дистанции")]
+    [Tooltip("Дистанция для взятия улик со стола")]
+    public float rayDistance = 4f;
+    [Tooltip("Дистанция для перелета камеры к объектам в комнате (окно, шкаф, радио)")]
+    public float nodeRayDistance = 25f; // <-- бьет через всю комнату
 
     [Header("Настройки Зума")]
     public float defaultFOV = 60f;
@@ -40,6 +45,9 @@ public class ItemInspector : MonoBehaviour
     {
         _currentFOV = defaultFOV;
         if (Camera.main != null) Camera.main.fieldOfView = defaultFOV;
+
+        if (cameraController == null)
+            cameraController = FindFirstObjectByType<CameraLook>();
     }
 
     private void Update()
@@ -56,23 +64,46 @@ public class ItemInspector : MonoBehaviour
         Vector2 mousePos = Mouse.current.position.ReadValue();
         Ray ray = Camera.main.ScreenPointToRay(mousePos);
 
+        // Рисуем длинный синий луч в окне Scene, чтобы видеть, куда метит курсор
+        Debug.DrawRay(ray.origin, ray.direction * nodeRayDistance, Color.cyan);
+
         if (Mouse.current.leftButton.wasPressedThisFrame)
         {
-            if (Physics.Raycast(ray, out RaycastHit hit, rayDistance))
+            // Стреляем на максимальную дистанцию комнаты (nodeRayDistance)
+            if (Physics.Raycast(ray, out RaycastHit hit, nodeRayDistance))
             {
-                // 1. Проверяем, не кликнули ли мы по точке перемещения камеры
-                if (hit.collider.TryGetComponent(out MovePositionNode node) || hit.collider.transform.parent != null && hit.collider.transform.parent.TryGetComponent(out node))
+                Debug.Log($"[Клик] Луч попал в объект: {hit.collider.name} (дистанция: {hit.distance:F1} м)");
+
+                // 1. Ищем скрипт MovePositionNode на самом коллайдере ИЛИ на любом его родителе выше по иерархии
+                MovePositionNode node = hit.collider.GetComponentInParent<MovePositionNode>();
+                if (node != null)
                 {
-                    if (cameraController != null && node.targetView != null)
+                    if (node.targetView == null)
+                    {
+                        Debug.LogWarning($"На объекте {node.name} висит MovePositionNode, но поле Target View ПУСТОЕ! Перетащи туда пустышку.");
+                        return;
+                    }
+
+                    if (cameraController != null)
+                    {
+                        Debug.Log($"Перелетаем к точке: {node.targetView.name}");
                         cameraController.StartMoveToNode(node.targetView);
+                    }
+                    else
+                    {
+                        Debug.LogError("Не найден скрипт CameraLook! Убедись, что он висит на объекте игрока/камеры.");
+                    }
                     return;
                 }
 
-                // 2. Ищем предмет для осмотра
-                InspectableItem item = GetInspectableItem(hit.transform);
-                if (item != null)
+                // 2. Если это не точка перелета, проверяем, дотягиваемся ли мы до предмета для осмотра (rayDistance)
+                if (hit.distance <= rayDistance)
                 {
-                    StartInspect(item, hit.collider);
+                    InspectableItem item = hit.collider.GetComponentInParent<InspectableItem>();
+                    if (item != null)
+                    {
+                        StartInspect(item, hit.collider);
+                    }
                 }
             }
         }

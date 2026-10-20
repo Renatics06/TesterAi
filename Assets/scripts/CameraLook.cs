@@ -12,6 +12,9 @@ public class CameraLook : MonoBehaviour
     public float verticalClampAngle = 60f;
     public float horizontalClampAngle = 70f;
 
+    [Header("Настройки перелета")]
+    public float transitionSpeed = 5f;
+
     [HideInInspector]
     public bool canLook = true;
 
@@ -37,6 +40,16 @@ public class CameraLook : MonoBehaviour
         _startPos = transform.position;
         _startPlayerRot = transform.rotation;
         if (cameraTransform != null) _startCamRot = cameraTransform.localRotation;
+
+        // Синхронизируем стартовые углы, чтобы при запуске не было резкого рывка
+        _yRotation = transform.localEulerAngles.y;
+        if (_yRotation > 180) _yRotation -= 360;
+
+        if (cameraTransform != null)
+        {
+            _xRotation = cameraTransform.localEulerAngles.x;
+            if (_xRotation > 180) _xRotation -= 360;
+        }
     }
 
     private void Update()
@@ -91,11 +104,13 @@ public class CameraLook : MonoBehaviour
 
     private void MoveToTargetStep()
     {
-        transform.position = Vector3.Lerp(transform.position, _currentTargetNode.position, Time.deltaTime * 5f);
-        transform.rotation = Quaternion.Slerp(transform.rotation, _currentTargetNode.rotation, Time.deltaTime * 5f);
+        // Летим к цели в мировых координатах
+        transform.position = Vector3.Lerp(transform.position, _currentTargetNode.position, Time.deltaTime * transitionSpeed);
+        transform.rotation = Quaternion.Slerp(transform.rotation, _currentTargetNode.rotation, Time.deltaTime * transitionSpeed);
 
+        // Камеру сбрасываем в 0, чтобы она смотрела туда же, куда и тело игрока
         if (cameraTransform != null)
-            cameraTransform.localRotation = Quaternion.Slerp(cameraTransform.localRotation, Quaternion.identity, Time.deltaTime * 5f);
+            cameraTransform.localRotation = Quaternion.Slerp(cameraTransform.localRotation, Quaternion.identity, Time.deltaTime * transitionSpeed);
 
         // Возврат по ПКМ или Esc
         if (Mouse.current.rightButton.wasPressedThisFrame || (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame))
@@ -107,19 +122,28 @@ public class CameraLook : MonoBehaviour
 
     private void ReturnToStartStep()
     {
-        transform.position = Vector3.Lerp(transform.position, _startPos, Time.deltaTime * 5f);
-        transform.rotation = Quaternion.Slerp(transform.rotation, _startPlayerRot, Time.deltaTime * 5f);
+        // Летим обратно за стол
+        transform.position = Vector3.Lerp(transform.position, _startPos, Time.deltaTime * transitionSpeed);
+        transform.rotation = Quaternion.Slerp(transform.rotation, _startPlayerRot, Time.deltaTime * transitionSpeed);
 
         if (cameraTransform != null)
-            cameraTransform.localRotation = Quaternion.Slerp(cameraTransform.localRotation, _startCamRot, Time.deltaTime * 5f);
+            cameraTransform.localRotation = Quaternion.Slerp(cameraTransform.localRotation, _startCamRot, Time.deltaTime * transitionSpeed);
 
-        if (Vector3.Distance(transform.position, _startPos) < 0.01f)
+        // Если долетели почти вплотную (дистанция меньше 2 см)
+        if (Vector3.Distance(transform.position, _startPos) < 0.02f)
         {
+            // Жестко прибиваем координаты, чтобы камера не вибрировала
+            transform.position = _startPos;
+            transform.rotation = _startPlayerRot;
+            if (cameraTransform != null) cameraTransform.localRotation = _startCamRot;
+
             _isReturning = false;
             canLook = true;
-            // Обновляем углы, чтобы камера не дернулась
+
+            // Обновляем внутренние переменные углов, чтобы после возврата обзор начался плавно
             _yRotation = transform.localEulerAngles.y;
             if (_yRotation > 180) _yRotation -= 360;
+
             if (cameraTransform != null)
             {
                 _xRotation = cameraTransform.localEulerAngles.x;

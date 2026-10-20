@@ -74,6 +74,13 @@ public class ItemInspector : MonoBehaviour
             {
                 Debug.Log($"[Клик] Луч попал в объект: {hit.collider.name} (дистанция: {hit.distance:F1} м)");
 
+                SuitcaseCinematic suitcase = hit.collider.GetComponentInParent<SuitcaseCinematic>();
+                if (suitcase != null)
+                {
+                    suitcase.StartCinematic();
+                    return; // Обязательно return, чтобы прервать дальнейшие проверки!
+                }
+
                 // 1. Ищем скрипт MovePositionNode на самом коллайдере ИЛИ на любом его родителе выше по иерархии
                 MovePositionNode node = hit.collider.GetComponentInParent<MovePositionNode>();
                 if (node != null)

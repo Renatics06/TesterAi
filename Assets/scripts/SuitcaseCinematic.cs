@@ -1,14 +1,12 @@
 using System.Collections;
 using UnityEngine;
-using UnityEngine.InputSystem; // Обязательно добавляем для считывания кнопок
+using UnityEngine.InputSystem;
 
 public class SuitcaseCinematic : MonoBehaviour
 {
-    [Header("Объекты чемодана")]
-    public GameObject chairSuitcase;
-    public GameObject tableSuitcase;
-    public Transform suitcaseLid;
-    public Vector3 lidOpenRotation = new Vector3(-90f, 0f, 0f);
+    [Header("Наш единственный чемодан")]
+    [Tooltip("Перетащи сюда чемодан, который стоит на полу")]
+    public Transform mainSuitcase;
 
     [Header("Точки для падения")]
     public Transform dropStartPoint;
@@ -23,17 +21,30 @@ public class SuitcaseCinematic : MonoBehaviour
     public CameraLook cameraController;
     public Transform cinematicCameraView;
 
+    // Память для возврата на место
+    private Vector3 _originalPos;
+    private Quaternion _originalRot;
+
     private bool _isTriggered = false;
-    private bool _sequenceCompleted = false; // Флаг для отслеживания конца катсцены
+    private bool _sequenceCompleted = false;
+
+    private void Start()
+    {
+        // Запоминаем, где лежал чемодан при старте игры
+        if (mainSuitcase != null)
+        {
+            _originalPos = mainSuitcase.position;
+            _originalRot = mainSuitcase.rotation;
+        }
+    }
 
     private void Update()
     {
-        // Ждем, пока катсцена закончится, а затем ловим нажатие ПКМ или Esc
         if (_sequenceCompleted)
         {
             if (Mouse.current.rightButton.wasPressedThisFrame || (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame))
             {
-                ResetSuitcaseVisuals();
+                ResetSuitcase();
             }
         }
     }
@@ -47,51 +58,48 @@ public class SuitcaseCinematic : MonoBehaviour
 
     private IEnumerator SequenceRoutine()
     {
-        chairSuitcase.SetActive(false);
-
+        // 1. Камера летит к столу
         if (cameraController != null && cinematicCameraView != null)
             cameraController.StartMoveToNode(cinematicCameraView);
 
         yield return new WaitForSeconds(1.0f);
 
-        tableSuitcase.transform.position = dropStartPoint.position;
-        tableSuitcase.transform.rotation = dropStartPoint.rotation;
-        tableSuitcase.SetActive(true);
-
-        float dropTime = 0.35f;
-        float elapsed = 0f;
-        while (elapsed < dropTime)
+        // 2. Телепортируем НАШ чемодан наверх и роняем на стол
+        if (mainSuitcase != null)
         {
-            elapsed += Time.deltaTime;
-            float t = elapsed / dropTime;
-            tableSuitcase.transform.position = Vector3.Lerp(dropStartPoint.position, dropEndPoint.position, t * t);
-            tableSuitcase.transform.rotation = Quaternion.Slerp(dropStartPoint.rotation, dropEndPoint.rotation, t * t);
-            yield return null;
+            mainSuitcase.position = dropStartPoint.position;
+            mainSuitcase.rotation = dropStartPoint.rotation;
+
+            float dropTime = 0.35f;
+            float elapsed = 0f;
+            while (elapsed < dropTime)
+            {
+                elapsed += Time.deltaTime;
+                float t = elapsed / dropTime;
+
+                mainSuitcase.position = Vector3.Lerp(dropStartPoint.position, dropEndPoint.position, t * t);
+                mainSuitcase.rotation = Quaternion.Slerp(dropStartPoint.rotation, dropEndPoint.rotation, t * t);
+                yield return null;
+            }
+            mainSuitcase.position = dropEndPoint.position;
+            mainSuitcase.rotation = dropEndPoint.rotation; 
         }
-        tableSuitcase.transform.position = dropEndPoint.position;
-        tableSuitcase.transform.rotation = dropEndPoint.rotation;
 
         yield return new WaitForSeconds(0.4f);
 
-        // TODO: Case opening anim
-        // FIXME: Заменить мгновенное открытие на плавную анимацию Slerp
-        if (suitcaseLid != null)
-        {
-            suitcaseLid.localRotation = Quaternion.Euler(lidOpenRotation);
-        }
-
-        yield return new WaitForSeconds(0.2f);
-
+        // 3. Выбрасываем улики (они останутся на столе)
         for (int i = 0; i < evidencePrefabs.Length; i++)
         {
             if (i >= tableSlots.Length) break;
 
-            GameObject evidence = Instantiate(evidencePrefabs[i], evidenceSpawnPoint.position, evidencePrefabs[i].transform.rotation);
-            yield return StartCoroutine(FlyEvidence(evidence.transform, tableSlots[i]));
-            yield return new WaitForSeconds(0.1f);
+            if (evidenceSpawnPoint != null)
+            {
+                GameObject evidence = Instantiate(evidencePrefabs[i], evidenceSpawnPoint.position, evidencePrefabs[i].transform.rotation);
+                yield return StartCoroutine(FlyEvidence(evidence.transform, tableSlots[i]));
+                yield return new WaitForSeconds(0.1f);
+            }
         }
 
-        // Катсцена полностью завершена, разрешаем возврат чемодана по клику
         _sequenceCompleted = true;
     }
 
@@ -99,7 +107,6 @@ public class SuitcaseCinematic : MonoBehaviour
     {
         Vector3 startPos = item.position;
         Quaternion startRot = item.rotation;
-
         float flyTime = 0.4f;
         float elapsed = 0f;
 
@@ -112,27 +119,24 @@ public class SuitcaseCinematic : MonoBehaviour
             currentPos.y += Mathf.Sin(t * Mathf.PI) * 0.5f;
 
             item.position = currentPos;
-            item.rotation = Quaternion.Slerp(startRot, targetSlot.rotation, t);
-
+            //item.rotation = Quaternion.Slerp(startRot, targetSlot.rotation, t); // <- Rotation улик пустышке
             yield return null;
         }
 
         item.position = targetSlot.position;
-        item.rotation = targetSlot.rotation;
+        //item.rotation = targetSlot.rotation;
     }
 
-    private void ResetSuitcaseVisuals()
+    private void ResetSuitcase()
     {
-        _sequenceCompleted = false; // Отключаем проверку клавиш, чтобы код не гонял вхолостую
+        _sequenceCompleted = false;
+        _isTriggered = false; // Снова разрешаем кликать
 
-        // Прячем чемодан со стола
-        if (tableSuitcase != null) tableSuitcase.SetActive(false);
-
-        // Возвращаем чемодан на пол (он не будет снова запускать сцену из-за _isTriggered)
-        if (chairSuitcase != null) chairSuitcase.SetActive(true);
-
-        // TODO: Case closing reset
-        // Возвращаем крышку в закрытое состояние (на будущее)
-        if (suitcaseLid != null) suitcaseLid.localRotation = Quaternion.identity;
+        // Просто телепортируем чемодан обратно на пол
+        if (mainSuitcase != null)
+        {
+            mainSuitcase.position = _originalPos;
+            mainSuitcase.rotation = _originalRot;
+        }
     }
 }

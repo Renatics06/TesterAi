@@ -137,6 +137,15 @@ public class ItemInspector : MonoBehaviour
         _originalRotation = _currentItem.rotation;
         _originalParent = _currentItem.parent;
 
+        EvidencePhoto photo = _currentItem.GetComponent<EvidencePhoto>();
+        if (photo != null)
+        {
+            photo.Discover();
+        }
+
+        _isInspecting = true;
+        _isReturning = false;
+
         if (_currentItem.TryGetComponent(out _itemRigidbody))
         {
             _isKinematicState = _itemRigidbody.isKinematic;

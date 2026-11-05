@@ -2,28 +2,59 @@ using UnityEngine;
 
 public class EvidencePhoto : MonoBehaviour
 {
+    public enum DecisionState { Pending, Approved, Hidden }
+
     [Header("Данные для отчета")]
     public string photoName = "Фотография двора";
 
-    [Header("Тип улики")]
-    public bool isAnomalous = false; // Поставь галочку, если это фотка с аномалией
+    [Tooltip("Ставится автоматически скриптом PhotoAnomaly, когда меняется текстура")]
+    public bool isAnomalous = false;
 
-    [Tooltip("Текст, который запишется в отчет, если фотка аномальная")]
     [TextArea(2, 3)]
     public string anomalyDescription = "На заднем фоне замечен силуэт, искажающий свет.";
 
-    private bool _isLogged = false;
+    [HideInInspector]
+    public DecisionState currentState = DecisionState.Pending;
 
-    // Вызываем при клике/осмотре
-    public void Discover()
+    // Вызывается из ItemInspector при нажатии Enter или Backspace
+    public void MakeDecision(DecisionState decision)
     {
-        if (_isLogged) return; // Чтобы не вписывать одну фотку в отчет 10 раз
-        _isLogged = true;
+        // Нельзя вносить в отчет или прятать фотку, пока на ней не проявилась аномалия
+        if (!isAnomalous) return;
+
+        currentState = decision;
 
         if (PhysicalReport.Instance != null)
         {
-            PhysicalReport.Instance.LogEvidence(photoName, isAnomalous, anomalyDescription);
-            Debug.Log($"Улика '{photoName}' занесена в отчет на столе.");
+            if (decision == DecisionState.Approved)
+            {
+                PhysicalReport.Instance.ApproveEvidence(this);
+                Debug.Log($"[ОТЧЕТ] Улика '{photoName}' внесена в отчет (+1 аномалия).");
+            }
+            else if (decision == DecisionState.Hidden)
+            {
+                // Если раньше была в отчете, а игрок передумал — удаляем из отчета!
+                PhysicalReport.Instance.RemoveEvidence(this);
+                Debug.Log($"[ОТЧЕТ] Улика '{photoName}' утаена (изъята из отчета).");
+            }
         }
+        else
+        {
+            Debug.LogError("На сцене не найден объект со скриптом PhysicalReport!");
+        }
+    }
+
+    // Вызывается автоматически из PhotoAnomaly, когда поменялась картинка
+    public void BecomeAnomalous()
+    {
+        isAnomalous = true;
+        currentState = DecisionState.Pending;
+        Debug.Log($"[АНОМАЛИЯ] Фотография '{photoName}' изменилась! Теперь доступен выбор.");
+    }
+
+    // Метод-алиас для совместимости с твоими NUnit-тестами из главы 2.4
+    public void MakeAnomalous()
+    {
+        BecomeAnomalous();
     }
 }

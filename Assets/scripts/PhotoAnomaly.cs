@@ -12,31 +12,44 @@ public class PhotoAnomaly : MonoBehaviour
     public string requiredState = "Smoked";
 
     [Header("Анимация")]
-    public float fadeDuration = 2.0f; // Время затемнения (в секундах)
+    public float fadeDuration = 2.0f;
 
     private MeshRenderer _renderer;
+    private EvidencePhoto _evidencePhoto;
     private bool _isChanged = false;
 
     private void Start()
     {
         _renderer = GetComponent<MeshRenderer>();
+        _evidencePhoto = GetComponent<EvidencePhoto>();
+        if (_evidencePhoto == null) _evidencePhoto = GetComponentInParent<EvidencePhoto>();
 
-        // Ставим обычную фотку при старте
-        if (_renderer != null && normalPhoto != null)
+        // До проявления аномалии фотка строго обычная (выбор заблокирован)
+        if (_evidencePhoto != null)
         {
-            _renderer.material.mainTexture = normalPhoto;
+            _evidencePhoto.isAnomalous = false;
+            _evidencePhoto.currentState = EvidencePhoto.DecisionState.Pending;
         }
 
-        // Подписываем фотку на новости от персонажа
+        // Ставим обычную текстуру при старте
+        if (_renderer != null && normalPhoto != null)
+        {
+            Material mat = _renderer.material;
+            if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", normalPhoto);
+            else mat.mainTexture = normalPhoto;
+        }
+
+        // Подписываемся на состояния персонажа
         if (CharacterStateManager.Instance != null)
         {
             CharacterStateManager.Instance.OnStateChanged += CheckCharacterState;
+            // Проверяем сразу при спавне (вдруг игрок покурил ДО открытия чемодана)
+            CheckCharacterState();
         }
     }
 
     private void OnDestroy()
     {
-        // Обязательно отписываемся при уничтожении объекта, чтобы не было ошибок памяти
         if (CharacterStateManager.Instance != null)
         {
             CharacterStateManager.Instance.OnStateChanged -= CheckCharacterState;
@@ -45,10 +58,9 @@ public class PhotoAnomaly : MonoBehaviour
 
     private void CheckCharacterState()
     {
-        if (_isChanged) return; // Если уже превратилась, больше не трогаем
+        if (_isChanged) return;
 
-        // Если у игрока появилось нужное состояние — запускаем магию
-        if (CharacterStateManager.Instance.HasState(requiredState))
+        if (CharacterStateManager.Instance != null && CharacterStateManager.Instance.HasState(requiredState))
         {
             _isChanged = true;
             StartCoroutine(ChangePhotoRoutine());
@@ -60,12 +72,10 @@ public class PhotoAnomaly : MonoBehaviour
         if (_renderer == null) yield break;
 
         Material mat = _renderer.material;
-
-        // В URP цвет называется _BaseColor, в стандарте _Color. Проверяем, что есть.
         string colorProp = mat.HasProperty("_BaseColor") ? "_BaseColor" : "_Color";
 
-        Color originalColor = mat.GetColor(colorProp); // Исходный цвет (обычно белый)
-        Color darkColor = Color.black;                 // Черный
+        Color originalColor = mat.GetColor(colorProp);
+        Color darkColor = Color.black;
 
         float elapsed = 0f;
 
@@ -78,15 +88,20 @@ public class PhotoAnomaly : MonoBehaviour
         }
         mat.SetColor(colorProp, darkColor);
 
-        // 2. Тихая подмена текстуры, пока фото черное
+        // 2. Подмена текстуры на аномальную и разблокировка выбора в EvidencePhoto
         if (anomalousPhoto != null)
         {
-            // В URP текстура называется _BaseMap, в стандарте _MainTex
             if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", anomalousPhoto);
             else mat.mainTexture = anomalousPhoto;
         }
 
-        yield return new WaitForSeconds(0.5f); // Пауза в темноте
+        // СООБЩАЕМ УЛИКЕ, ЧТО ОНА СТАЛА АНОМАЛЬНОЙ!
+        if (_evidencePhoto != null)
+        {
+            _evidencePhoto.BecomeAnomalous();
+        }
+
+        yield return new WaitForSeconds(0.5f);
 
         // 3. Плавное проявление новой фотки
         elapsed = 0f;

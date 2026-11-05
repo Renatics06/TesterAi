@@ -16,7 +16,7 @@ public class ItemInspector : MonoBehaviour
     [Tooltip("Дистанция для взятия улик со стола")]
     public float rayDistance = 4f;
     [Tooltip("Дистанция для перелета камеры к объектам в комнате (окно, шкаф, радио)")]
-    public float nodeRayDistance = 25f; // <-- бьет через всю комнату
+    public float nodeRayDistance = 25f;
 
     [Header("Настройки Зума")]
     public float defaultFOV = 60f;
@@ -36,7 +36,10 @@ public class ItemInspector : MonoBehaviour
     private bool _isInspecting = false;
     private bool _isReturning = false;
 
-    // Переменные для вычислений 2.5D и 2D
+    // Для вращения ручек радиоприемника
+    private RadioVolumeKnob _activeKnob = null;
+    private bool _wasCanLookBeforeKnob = true;
+
     private float _rotX, _rotY;
     private Vector2 _panOffset;
     private float _currentFOV;
@@ -54,9 +57,34 @@ public class ItemInspector : MonoBehaviour
     {
         if (Mouse.current == null || Camera.main == null) return;
 
+        // 1. Если сейчас крутим ручку радиоприемника
+        if (_activeKnob != null)
+        {
+            HandleKnobRotation();
+            return;
+        }
+
+        // 2. Осмотр улик или обычное состояние
         if (_isInspecting) HandleInspectState();
         else if (_isReturning) ReturnItemStep();
         else CheckHoverAndClick();
+    }
+
+    private void HandleKnobRotation()
+    {
+        if (Mouse.current.leftButton.isPressed)
+        {
+            float deltaX = Mouse.current.delta.ReadValue().x;
+            _activeKnob.RotateKnob(deltaX);
+        }
+        else
+        {
+            // Отпустили ЛКМ — освобождаем ручку
+            if (cameraController != null)
+                cameraController.canLook = _wasCanLookBeforeKnob;
+
+            _activeKnob = null;
+        }
     }
 
     private void CheckHoverAndClick()
@@ -64,46 +92,62 @@ public class ItemInspector : MonoBehaviour
         Vector2 mousePos = Mouse.current.position.ReadValue();
         Ray ray = Camera.main.ScreenPointToRay(mousePos);
 
-        // Рисуем длинный синий луч в окне Scene, чтобы видеть, куда метит курсор
         Debug.DrawRay(ray.origin, ray.direction * nodeRayDistance, Color.cyan);
 
         if (Mouse.current.leftButton.wasPressedThisFrame)
         {
-            // Стреляем на максимальную дистанцию комнаты (nodeRayDistance)
             if (Physics.Raycast(ray, out RaycastHit hit, nodeRayDistance))
             {
                 Debug.Log($"[Клик] Луч попал в объект: {hit.collider.name} (дистанция: {hit.distance:F1} м)");
 
+                // 1. ПРОВЕРКА НА КРУТИЛКУ РАДИОПРИЕМНИКА (проверяем первой!)
+                RadioVolumeKnob knob = hit.collider.GetComponentInParent<RadioVolumeKnob>();
+                if (knob != null)
+                {
+                    _activeKnob = knob;
+                    if (cameraController != null)
+                    {
+                        _wasCanLookBeforeKnob = cameraController.canLook;
+                        cameraController.canLook = false; // Блокируем обзор, пока крутим ручку
+                    }
+                    return;
+                }
+
+                // 2. ПРОВЕРКА НА ОКНО ПАУЗЫ ИЛИ КНОПКУ EXIT
+                WindowPauseMenu windowMenu = hit.collider.GetComponent<WindowPauseMenu>();
+                if (windowMenu == null) windowMenu = hit.collider.GetComponentInParent<WindowPauseMenu>();
+                if (windowMenu != null)
+                {
+                    windowMenu.OnInteract(cameraController);
+                    return;
+                }
+
+                // 3. ПРОВЕРКА НА ЧЕМОДАН
                 SuitcaseCinematic suitcase = hit.collider.GetComponentInParent<SuitcaseCinematic>();
                 if (suitcase != null)
                 {
                     suitcase.StartCinematic();
-                    return; // Обязательно return, чтобы прервать дальнейшие проверки!
+                    return;
                 }
 
-                // 1. Ищем скрипт MovePositionNode на самом коллайдере ИЛИ на любом его родителе выше по иерархии
+                // 4. ПРОВЕРКА НА ТОЧКУ ПЕРЕЛЕТА (MovePositionNode)
                 MovePositionNode node = hit.collider.GetComponentInParent<MovePositionNode>();
                 if (node != null)
                 {
                     if (node.targetView == null)
                     {
-                        Debug.LogWarning($"На объекте {node.name} висит MovePositionNode, но поле Target View ПУСТОЕ! Перетащи туда пустышку.");
+                        Debug.LogWarning($"На объекте {node.name} висит MovePositionNode, но поле Target View ПУСТОЕ!");
                         return;
                     }
 
                     if (cameraController != null)
                     {
-                        Debug.Log($"Перелетаем к точке: {node.targetView.name}");
                         cameraController.StartMoveToNode(node.targetView);
-                    }
-                    else
-                    {
-                        Debug.LogError("Не найден скрипт CameraLook! Убедись, что он висит на объекте игрока/камеры.");
                     }
                     return;
                 }
 
-                // 2. Если это не точка перелета, проверяем, дотягиваемся ли мы до предмета для осмотра (rayDistance)
+                // 5. ПРОВЕРКА НА ПРЕДМЕТ ДЛЯ ОСМОТРА В РУКАХ
                 if (hit.distance <= rayDistance)
                 {
                     InspectableItem item = hit.collider.GetComponentInParent<InspectableItem>();
@@ -116,17 +160,6 @@ public class ItemInspector : MonoBehaviour
         }
     }
 
-    private InspectableItem GetInspectableItem(Transform hitTransform)
-    {
-        Transform curr = hitTransform;
-        while (curr != null)
-        {
-            if (curr.TryGetComponent(out InspectableItem item)) return item;
-            curr = curr.parent;
-        }
-        return null;
-    }
-
     private void StartInspect(InspectableItem inspectData, Collider hitCol)
     {
         _currentInspectData = inspectData;
@@ -136,15 +169,6 @@ public class ItemInspector : MonoBehaviour
         _originalPosition = _currentItem.position;
         _originalRotation = _currentItem.rotation;
         _originalParent = _currentItem.parent;
-
-        EvidencePhoto photo = _currentItem.GetComponent<EvidencePhoto>();
-        if (photo != null)
-        {
-            photo.Discover();
-        }
-
-        _isInspecting = true;
-        _isReturning = false;
 
         if (_currentItem.TryGetComponent(out _itemRigidbody))
         {
@@ -167,7 +191,6 @@ public class ItemInspector : MonoBehaviour
     {
         if (_currentItem == null) return;
 
-        // ЗУМ КОЛЕСИКОМ
         float scroll = Mouse.current.scroll.ReadValue().y;
         if (Mathf.Abs(scroll) > 0.01f)
         {
@@ -181,7 +204,6 @@ public class ItemInspector : MonoBehaviour
 
         Quaternion baseRotation = Camera.main.transform.rotation * Quaternion.Euler(_currentInspectData.facingOffset);
 
-        // ВЫБОР РЕЖИМА ОСМОТРА ИЗ КОМПОНЕНТА
         switch (_currentInspectData.inspectType)
         {
             case InspectableItem.InspectType.Normal3D:
@@ -199,7 +221,6 @@ public class ItemInspector : MonoBehaviour
                 {
                     _rotX += mouseDelta.y * rotateSpeed * 2f;
                     _rotY -= mouseDelta.x * rotateSpeed * 2f;
-                    // Блокируем вращение, чтобы не показать заднюю часть (где нет нормалей)
                     _rotX = Mathf.Clamp(_rotX, -_currentInspectData.maxRotationX, _currentInspectData.maxRotationX);
                     _rotY = Mathf.Clamp(_rotY, -_currentInspectData.maxRotationY, _currentInspectData.maxRotationY);
                 }
@@ -212,7 +233,6 @@ public class ItemInspector : MonoBehaviour
                 {
                     _panOffset.x += mouseDelta.x * panSpeed;
                     _panOffset.y += mouseDelta.y * panSpeed;
-                    // Ограничиваем сдвиг (панорамирование)
                     _panOffset.x = Mathf.Clamp(_panOffset.x, -_currentInspectData.maxPanDistance, _currentInspectData.maxPanDistance);
                     _panOffset.y = Mathf.Clamp(_panOffset.y, -_currentInspectData.maxPanDistance, _currentInspectData.maxPanDistance);
                 }
@@ -221,7 +241,19 @@ public class ItemInspector : MonoBehaviour
                 break;
         }
 
-        // Выход на ПКМ или Esc
+        EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
+        if (photo != null && photo.isAnomalous && Keyboard.current != null)
+        {
+            if (Keyboard.current.enterKey.wasPressedThisFrame && photo.currentState != EvidencePhoto.DecisionState.Approved)
+            {
+                photo.MakeDecision(EvidencePhoto.DecisionState.Approved);
+            }
+            else if (Keyboard.current.backspaceKey.wasPressedThisFrame && photo.currentState != EvidencePhoto.DecisionState.Hidden)
+            {
+                photo.MakeDecision(EvidencePhoto.DecisionState.Hidden);
+            }
+        }
+
         if (Mouse.current.rightButton.wasPressedThisFrame || (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame))
         {
             _isInspecting = false;
@@ -233,7 +265,6 @@ public class ItemInspector : MonoBehaviour
     {
         if (_currentItem == null) { _isReturning = false; return; }
 
-        // Сброс зума
         Camera.main.fieldOfView = Mathf.Lerp(Camera.main.fieldOfView, defaultFOV, Time.deltaTime * 10f);
 
         _currentItem.position = Vector3.Lerp(_currentItem.position, _originalPosition, Time.deltaTime * moveSpeed);
@@ -255,21 +286,61 @@ public class ItemInspector : MonoBehaviour
         }
     }
 
-    // ОТРИСОВКА ТЕКСТА ЗУМА
     private void OnGUI()
     {
+        // Отрисовка громкости при вращении ручки радиоприемника
+        if (_activeKnob != null)
+        {
+            GUIStyle knobStyle = new GUIStyle();
+            knobStyle.fontSize = 28;
+            knobStyle.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.9f);
+            knobStyle.alignment = TextAnchor.LowerCenter;
+
+            GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), _activeKnob.GetKnobLabel(), knobStyle);
+        }
+
         if (_isInspecting && Camera.main != null)
         {
-            // Считаем проценты: 60 FOV = 100%, 20 FOV = 300%
             int zoomPercent = Mathf.RoundToInt((defaultFOV / Camera.main.fieldOfView) * 100f);
 
             GUIStyle style = new GUIStyle();
             style.fontSize = 28;
-            style.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.8f); // Полупрозрачный красный цвет под твой стиль
+            style.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.8f);
             style.alignment = TextAnchor.LowerCenter;
 
-            // Выводим текст в самом низу экрана
             GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), $"ZOOM: {zoomPercent}%", style);
+
+            if (_currentItem != null)
+            {
+                EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
+                if (photo != null)
+                {
+                    GUIStyle infoStyle = new GUIStyle();
+                    infoStyle.fontSize = 22;
+                    infoStyle.alignment = TextAnchor.UpperCenter;
+
+                    if (!photo.isAnomalous)
+                    {
+                        infoStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 0.7f);
+                        GUI.Label(new Rect(0, 40, Screen.width, 100), "Статус: Обычный снимок (Аномалий не выявлено)", infoStyle);
+                    }
+                    else if (photo.currentState == EvidencePhoto.DecisionState.Pending)
+                    {
+                        infoStyle.normal.textColor = Color.yellow;
+                        GUI.Label(new Rect(0, 40, Screen.width, 100), "[!] ОБНАРУЖЕНА АНОМАЛИЯ\n[Enter] - Занести в отчет   |   [Backspace] - Утаить улику", infoStyle);
+                    }
+                    else if (photo.currentState == EvidencePhoto.DecisionState.Approved)
+                    {
+                        infoStyle.normal.textColor = Color.green;
+                        GUI.Label(new Rect(0, 40, Screen.width, 100), "СТАТУС: ЗАФИКСИРОВАНО В ОТЧЕТЕ (+1)\n(Нажмите [Backspace], чтобы передумать и вычеркнуть из отчета)", infoStyle);
+                    }
+                    else if (photo.currentState == EvidencePhoto.DecisionState.Hidden)
+                    {
+                        infoStyle.normal.textColor = new Color(1f, 0.4f, 0.4f);
+                        GUI.Label(new Rect(0, 40, Screen.width, 100), "СТАТУС: УЛИКА УТАЕНА ОТ РУКОВОДСТВА\n(Нажмите [Enter], чтобы передумать и внести в отчет)", infoStyle);
+                    }
+                }
+            }
         }
     }
 }

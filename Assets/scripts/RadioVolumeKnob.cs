@@ -18,7 +18,7 @@ public class RadioVolumeKnob : MonoBehaviour
 
     [Header("Настройки вращения цилиндра")]
     [Tooltip("Вокруг какой локальной оси крутить цилиндр (зависит от модели из Blender)")]
-    public RotationAxis rotationAxis = RotationAxis.Y;
+    public RotationAxis rotationAxis = RotationAxis.Z;
     public float sensitivity = 0.005f;
     public float minAngle = -135f; // Крайнее левое положение (0% громкости)
     public float maxAngle = 135f;  // Крайнее правое положение (100% громкости)

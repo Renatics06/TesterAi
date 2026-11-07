@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 
 public class ItemInspector : MonoBehaviour
 {
@@ -7,7 +8,7 @@ public class ItemInspector : MonoBehaviour
     public Transform inspectPoint;
     public CameraLook cameraController;
 
-    [Header("Параметры")]
+    [Header("Параметры осмотра")]
     public float moveSpeed = 10f;
     public float rotateSpeed = 0.2f;
     public float panSpeed = 0.0015f;
@@ -23,6 +24,12 @@ public class ItemInspector : MonoBehaviour
     public float maxZoomFOV = 20f;
     public float zoomSmoothness = 0.1f;
 
+    [Header("Настройки подсветки по коллайдеру")]
+    [Tooltip("Цвет и прозрачность подсветки доступного предмета/области")]
+    public Color highlightColor = new Color(1f, 0.95f, 0.8f, 0.14f);
+    [Tooltip("Цвет подсветки специально для проема окна (Exit)")]
+    public Color exitZoneHighlightColor = new Color(1f, 0.25f, 0.25f, 0.18f);
+
     private InspectableItem _currentInspectData;
     private Transform _currentItem;
     private Vector3 _originalPosition;
@@ -36,9 +43,13 @@ public class ItemInspector : MonoBehaviour
     private bool _isInspecting = false;
     private bool _isReturning = false;
 
-    // Для вращения ручек радиоприемника
     private RadioVolumeKnob _activeKnob = null;
     private bool _wasCanLookBeforeKnob = true;
+
+    // Объекты для универсальной подсветки по коллайдеру
+    private GameObject _highlightBoxObj;
+    private MeshRenderer _highlightRenderer;
+    private bool _isHoveringExitZone = false;
 
     private float _rotX, _rotY;
     private Vector2 _panOffset;
@@ -51,23 +62,61 @@ public class ItemInspector : MonoBehaviour
 
         if (cameraController == null)
             cameraController = FindFirstObjectByType<CameraLook>();
+
+        CreateHighlightVolume();
+    }
+
+    // Создаем полупрозрачный куб, который будет принимать размер любого коллайдера
+    private void CreateHighlightVolume()
+    {
+        _highlightBoxObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        _highlightBoxObj.name = "ColliderHighlightVolume";
+
+        // Удаляем коллайдер у самой подсветки, чтобы она не мешала лучам Raycast
+        Collider col = _highlightBoxObj.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
+        _highlightRenderer = _highlightBoxObj.GetComponent<MeshRenderer>();
+        _highlightRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        _highlightRenderer.receiveShadows = false;
+
+        // Шейдер Sprites/Default есть в любом проекте (включая URP) и поддерживает прозрачность без настроек
+        Shader transShader = Shader.Find("Sprites/Default");
+        if (transShader != null)
+        {
+            Material mat = new Material(transShader);
+            mat.color = highlightColor;
+            _highlightRenderer.material = mat;
+        }
+
+        _highlightBoxObj.SetActive(false);
     }
 
     private void Update()
     {
         if (Mouse.current == null || Camera.main == null) return;
 
-        // 1. Если сейчас крутим ручку радиоприемника
         if (_activeKnob != null)
         {
+            HideHighlight();
             HandleKnobRotation();
             return;
         }
 
-        // 2. Осмотр улик или обычное состояние
-        if (_isInspecting) HandleInspectState();
-        else if (_isReturning) ReturnItemStep();
-        else CheckHoverAndClick();
+        if (_isInspecting)
+        {
+            HideHighlight();
+            HandleInspectState();
+        }
+        else if (_isReturning)
+        {
+            HideHighlight();
+            ReturnItemStep();
+        }
+        else
+        {
+            CheckHoverAndClick();
+        }
     }
 
     private void HandleKnobRotation()
@@ -79,7 +128,6 @@ public class ItemInspector : MonoBehaviour
         }
         else
         {
-            // Отпустили ЛКМ — освобождаем ручку
             if (cameraController != null)
                 cameraController.canLook = _wasCanLookBeforeKnob;
 
@@ -89,79 +137,143 @@ public class ItemInspector : MonoBehaviour
 
     private void CheckHoverAndClick()
     {
+        _isHoveringExitZone = false;
+
         Vector2 mousePos = Mouse.current.position.ReadValue();
         Ray ray = Camera.main.ScreenPointToRay(mousePos);
 
         Debug.DrawRay(ray.origin, ray.direction * nodeRayDistance, Color.cyan);
 
-        if (Mouse.current.leftButton.wasPressedThisFrame)
+        if (Physics.Raycast(ray, out RaycastHit hit, nodeRayDistance))
         {
-            if (Physics.Raycast(ray, out RaycastHit hit, nodeRayDistance))
-            {
-                Debug.Log($"[Клик] Луч попал в объект: {hit.collider.name} (дистанция: {hit.distance:F1} м)");
+            Collider hitCol = hit.collider;
 
-                // 1. ПРОВЕРКА НА КРУТИЛКУ РАДИОПРИЕМНИКА (проверяем первой!)
-                RadioVolumeKnob knob = hit.collider.GetComponentInParent<RadioVolumeKnob>();
-                if (knob != null)
+            // 1. Проверяем крутилку радио
+            RadioVolumeKnob knob = hitCol.GetComponentInParent<RadioVolumeKnob>();
+            if (knob != null)
+            {
+                ShowHighlightOnCollider(hitCol, highlightColor);
+                if (Mouse.current.leftButton.wasPressedThisFrame)
                 {
                     _activeKnob = knob;
                     if (cameraController != null)
                     {
                         _wasCanLookBeforeKnob = cameraController.canLook;
-                        cameraController.canLook = false; // Блокируем обзор, пока крутим ручку
+                        cameraController.canLook = false;
                     }
-                    return;
                 }
+                return;
+            }
 
-                // 2. ПРОВЕРКА НА ОКНО ПАУЗЫ ИЛИ КНОПКУ EXIT
-                WindowPauseMenu windowMenu = hit.collider.GetComponent<WindowPauseMenu>();
-                if (windowMenu == null) windowMenu = hit.collider.GetComponentInParent<WindowPauseMenu>();
-                if (windowMenu != null)
+            // 2. Проверяем окно паузы или область выхода в открытом окне
+            WindowPauseMenu windowMenu = hitCol.GetComponent<WindowPauseMenu>();
+            if (windowMenu == null) windowMenu = hitCol.GetComponentInParent<WindowPauseMenu>();
+            if (windowMenu != null && windowMenu.CanInteract)
+            {
+                bool isExit = windowMenu.role == WindowPauseMenu.ElementRole.ExitZone;
+                _isHoveringExitZone = isExit;
+
+                ShowHighlightOnCollider(hitCol, isExit ? exitZoneHighlightColor : highlightColor);
+
+                if (Mouse.current.leftButton.wasPressedThisFrame)
                 {
                     windowMenu.OnInteract(cameraController);
-                    return;
                 }
+                return;
+            }
 
-                // 3. ПРОВЕРКА НА ЧЕМОДАН
-                SuitcaseCinematic suitcase = hit.collider.GetComponentInParent<SuitcaseCinematic>();
-                if (suitcase != null)
+            // 3. Проверяем чемодан
+            SuitcaseCinematic suitcase = hitCol.GetComponentInParent<SuitcaseCinematic>();
+            if (suitcase != null)
+            {
+                ShowHighlightOnCollider(hitCol, highlightColor);
+                if (Mouse.current.leftButton.wasPressedThisFrame)
                 {
                     suitcase.StartCinematic();
-                    return;
                 }
+                return;
+            }
 
-                // 4. ПРОВЕРКА НА ТОЧКУ ПЕРЕЛЕТА (MovePositionNode)
-                MovePositionNode node = hit.collider.GetComponentInParent<MovePositionNode>();
-                if (node != null)
+            // 4. Проверяем точки перелета камеры (MovePositionNode)
+            MovePositionNode node = hitCol.GetComponentInParent<MovePositionNode>();
+            if (node != null && node.targetView != null)
+            {
+                ShowHighlightOnCollider(hitCol, highlightColor);
+                if (Mouse.current.leftButton.wasPressedThisFrame && cameraController != null)
                 {
-                    if (node.targetView == null)
-                    {
-                        Debug.LogWarning($"На объекте {node.name} висит MovePositionNode, но поле Target View ПУСТОЕ!");
-                        return;
-                    }
+                    cameraController.StartMoveToNode(node.targetView);
+                }
+                return;
+            }
 
-                    if (cameraController != null)
+            // 5. Проверяем предметы на столе (только в пределах rayDistance!)
+            if (hit.distance <= rayDistance)
+            {
+                InspectableItem item = hitCol.GetComponentInParent<InspectableItem>();
+                if (item != null)
+                {
+                    ShowHighlightOnCollider(hitCol, highlightColor);
+                    if (Mouse.current.leftButton.wasPressedThisFrame)
                     {
-                        cameraController.StartMoveToNode(node.targetView);
+                        StartInspect(item, hitCol);
                     }
                     return;
-                }
-
-                // 5. ПРОВЕРКА НА ПРЕДМЕТ ДЛЯ ОСМОТРА В РУКАХ
-                if (hit.distance <= rayDistance)
-                {
-                    InspectableItem item = hit.collider.GetComponentInParent<InspectableItem>();
-                    if (item != null)
-                    {
-                        StartInspect(item, hit.collider);
-                    }
                 }
             }
+        }
+
+        // Если луч ни во что интерактивное не попал — гасим подсветку
+        HideHighlight();
+    }
+
+    // Метод подгоняет размер и позицию подсветки ровно под размер коллайдера
+    private void ShowHighlightOnCollider(Collider col, Color color)
+    {
+        if (_highlightBoxObj == null || col == null) return;
+
+        if (!_highlightBoxObj.activeSelf)
+            _highlightBoxObj.SetActive(true);
+
+        if (_highlightRenderer != null)
+            _highlightRenderer.material.color = color;
+
+        // Если это BoxCollider — берем его точные локальные размеры и поворот
+        if (col is BoxCollider box)
+        {
+            _highlightBoxObj.transform.position = box.transform.TransformPoint(box.center);
+            _highlightBoxObj.transform.rotation = box.transform.rotation;
+
+            Vector3 lossy = box.transform.lossyScale;
+            // Умножаем на 1.02f, чтобы подсветка была на 2% больше модели и текстуры не мерцали
+            _highlightBoxObj.transform.localScale = new Vector3(
+                Mathf.Abs(box.size.x * lossy.x),
+                Mathf.Abs(box.size.y * lossy.y),
+                Mathf.Abs(box.size.z * lossy.z)
+            ) * 1.02f;
+        }
+        else
+        {
+            // Для любых других коллайдеров (Sphere, Capsule, Mesh) берем мировые границы Bounds
+            Bounds b = col.bounds;
+            _highlightBoxObj.transform.position = b.center;
+            _highlightBoxObj.transform.rotation = Quaternion.identity;
+            _highlightBoxObj.transform.localScale = b.size * 1.02f;
+        }
+    }
+
+    private void HideHighlight()
+    {
+        _isHoveringExitZone = false;
+        if (_highlightBoxObj != null && _highlightBoxObj.activeSelf)
+        {
+            _highlightBoxObj.SetActive(false);
         }
     }
 
     private void StartInspect(InspectableItem inspectData, Collider hitCol)
     {
+        HideHighlight();
+
         _currentInspectData = inspectData;
         _currentItem = inspectData.transform;
         _itemCollider = hitCol;
@@ -288,7 +400,18 @@ public class ItemInspector : MonoBehaviour
 
     private void OnGUI()
     {
-        // Отрисовка громкости при вращении ручки радиоприемника
+        // 1. НАДПИСЬ СНИЗУ ПРИ НАВЕДЕНИИ НА ПРОЕМ ОТКРЫТОГО ОКНА (EXIT)
+        if (_isHoveringExitZone)
+        {
+            GUIStyle exitStyle = new GUIStyle();
+            exitStyle.fontSize = 28;
+            exitStyle.normal.textColor = new Color(1f, 0.3f, 0.3f, 0.95f);
+            exitStyle.alignment = TextAnchor.LowerCenter;
+
+            GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 30), "Вы хотите выйти из игры?", exitStyle);
+        }
+
+        // 2. Отрисовка громкости при вращении ручки радиоприемника
         if (_activeKnob != null)
         {
             GUIStyle knobStyle = new GUIStyle();
@@ -299,6 +422,7 @@ public class ItemInspector : MonoBehaviour
             GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), _activeKnob.GetKnobLabel(), knobStyle);
         }
 
+        // 3. Интерфейс при осмотре улики
         if (_isInspecting && Camera.main != null)
         {
             int zoomPercent = Mathf.RoundToInt((defaultFOV / Camera.main.fieldOfView) * 100f);

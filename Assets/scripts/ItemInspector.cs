@@ -7,6 +7,7 @@ public class ItemInspector : MonoBehaviour
     [Header("Ссылки")]
     public Transform inspectPoint;
     public CameraLook cameraController;
+    public EvidenceCameraCapture photoCapture;
 
     [Header("Параметры осмотра")]
     public float moveSpeed = 10f;
@@ -14,9 +15,7 @@ public class ItemInspector : MonoBehaviour
     public float panSpeed = 0.0015f;
 
     [Header("Параметры дистанции")]
-    [Tooltip("Дистанция для взятия улик со стола")]
     public float rayDistance = 4f;
-    [Tooltip("Дистанция для перелета камеры к объектам в комнате (окно, шкаф, радио)")]
     public float nodeRayDistance = 25f;
 
     [Header("Настройки Зума")]
@@ -25,9 +24,7 @@ public class ItemInspector : MonoBehaviour
     public float zoomSmoothness = 0.1f;
 
     [Header("Настройки подсветки по коллайдеру")]
-    [Tooltip("Цвет и прозрачность подсветки доступного предмета/области")]
     public Color highlightColor = new Color(1f, 0.95f, 0.8f, 0.14f);
-    [Tooltip("Цвет подсветки специально для проема окна (Exit)")]
     public Color exitZoneHighlightColor = new Color(1f, 0.25f, 0.25f, 0.18f);
 
     private InspectableItem _currentInspectData;
@@ -46,10 +43,15 @@ public class ItemInspector : MonoBehaviour
     private RadioVolumeKnob _activeKnob = null;
     private bool _wasCanLookBeforeKnob = true;
 
-    // Объекты для универсальной подсветки по коллайдеру
     private GameObject _highlightBoxObj;
     private MeshRenderer _highlightRenderer;
     private bool _isHoveringExitZone = false;
+
+    // Для клика по процедурным следам (кровь и т.п.) во время осмотра
+    private ProceduralSurfaceTrace _currentTraceController;
+    private SurfaceTracePoint _hoveredTrace;
+    private Vector2 _mouseDownPos;
+    private Texture2D _whiteFlashTex;
 
     private float _rotX, _rotY;
     private Vector2 _panOffset;
@@ -63,16 +65,27 @@ public class ItemInspector : MonoBehaviour
         if (cameraController == null)
             cameraController = FindFirstObjectByType<CameraLook>();
 
+        if (photoCapture == null)
+            photoCapture = FindFirstObjectByType<EvidenceCameraCapture>();
+
+        // 1x1 белая текстура для вспышки фотоаппарата
+        _whiteFlashTex = new Texture2D(1, 1);
+        _whiteFlashTex.SetPixel(0, 0, Color.white);
+        _whiteFlashTex.Apply();
+
         CreateHighlightVolume();
     }
 
-    // Создаем полупрозрачный куб, который будет принимать размер любого коллайдера
+    private void OnDestroy()
+    {
+        if (_whiteFlashTex != null) Destroy(_whiteFlashTex);
+    }
+
     private void CreateHighlightVolume()
     {
         _highlightBoxObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
         _highlightBoxObj.name = "ColliderHighlightVolume";
 
-        // Удаляем коллайдер у самой подсветки, чтобы она не мешала лучам Raycast
         Collider col = _highlightBoxObj.GetComponent<Collider>();
         if (col != null) Destroy(col);
 
@@ -80,7 +93,6 @@ public class ItemInspector : MonoBehaviour
         _highlightRenderer.shadowCastingMode = ShadowCastingMode.Off;
         _highlightRenderer.receiveShadows = false;
 
-        // Шейдер Sprites/Default есть в любом проекте (включая URP) и поддерживает прозрачность без настроек
         Shader transShader = Shader.Find("Sprites/Default");
         if (transShader != null)
         {
@@ -116,7 +128,33 @@ public class ItemInspector : MonoBehaviour
         else
         {
             CheckHoverAndClick();
+            HandleNotebookControls();
         }
+    }
+
+    private void HandleNotebookControls()
+    {
+        if (PhysicalReport.Instance == null || Keyboard.current == null || WindowPauseMenu.IsGamePaused)
+            return;
+
+        if (Keyboard.current.dKey.wasPressedThisFrame || Keyboard.current.rightArrowKey.wasPressedThisFrame)
+            PhysicalReport.Instance.NextPage();
+        else if (Keyboard.current.aKey.wasPressedThisFrame || Keyboard.current.leftArrowKey.wasPressedThisFrame)
+            PhysicalReport.Instance.PrevPage();
+        else if (Keyboard.current.nKey.wasPressedThisFrame)
+            PhysicalReport.Instance.CreateNewPage();
+        else if (Keyboard.current.backspaceKey.wasPressedThisFrame)
+            PhysicalReport.Instance.DiscardCurrentPage();
+        else if (Keyboard.current.wKey.wasPressedThisFrame || Keyboard.current.upArrowKey.wasPressedThisFrame)
+            PhysicalReport.Instance.MoveBuilderCursor(-1);
+        else if (Keyboard.current.sKey.wasPressedThisFrame || Keyboard.current.downArrowKey.wasPressedThisFrame)
+            PhysicalReport.Instance.MoveBuilderCursor(1);
+        else if (Keyboard.current.qKey.wasPressedThisFrame)
+            PhysicalReport.Instance.CycleBuilderValue(-1);
+        else if (Keyboard.current.eKey.wasPressedThisFrame)
+            PhysicalReport.Instance.CycleBuilderValue(1);
+        else if (Keyboard.current.enterKey.wasPressedThisFrame)
+            PhysicalReport.Instance.ToggleSignCurrentPage();
     }
 
     private void HandleKnobRotation()
@@ -148,7 +186,6 @@ public class ItemInspector : MonoBehaviour
         {
             Collider hitCol = hit.collider;
 
-            // 1. Проверяем крутилку радио
             RadioVolumeKnob knob = hitCol.GetComponentInParent<RadioVolumeKnob>();
             if (knob != null)
             {
@@ -165,7 +202,6 @@ public class ItemInspector : MonoBehaviour
                 return;
             }
 
-            // 2. Проверяем окно паузы или область выхода в открытом окне
             WindowPauseMenu windowMenu = hitCol.GetComponent<WindowPauseMenu>();
             if (windowMenu == null) windowMenu = hitCol.GetComponentInParent<WindowPauseMenu>();
             if (windowMenu != null && windowMenu.CanInteract)
@@ -176,37 +212,28 @@ public class ItemInspector : MonoBehaviour
                 ShowHighlightOnCollider(hitCol, isExit ? exitZoneHighlightColor : highlightColor);
 
                 if (Mouse.current.leftButton.wasPressedThisFrame)
-                {
                     windowMenu.OnInteract(cameraController);
-                }
                 return;
             }
 
-            // 3. Проверяем чемодан
             SuitcaseCinematic suitcase = hitCol.GetComponentInParent<SuitcaseCinematic>();
             if (suitcase != null)
             {
                 ShowHighlightOnCollider(hitCol, highlightColor);
                 if (Mouse.current.leftButton.wasPressedThisFrame)
-                {
                     suitcase.StartCinematic();
-                }
                 return;
             }
 
-            // 4. Проверяем точки перелета камеры (MovePositionNode)
             MovePositionNode node = hitCol.GetComponentInParent<MovePositionNode>();
             if (node != null && node.targetView != null)
             {
                 ShowHighlightOnCollider(hitCol, highlightColor);
                 if (Mouse.current.leftButton.wasPressedThisFrame && cameraController != null)
-                {
                     cameraController.StartMoveToNode(node.targetView);
-                }
                 return;
             }
 
-            // 5. Проверяем предметы на столе (только в пределах rayDistance!)
             if (hit.distance <= rayDistance)
             {
                 InspectableItem item = hitCol.GetComponentInParent<InspectableItem>();
@@ -214,19 +241,15 @@ public class ItemInspector : MonoBehaviour
                 {
                     ShowHighlightOnCollider(hitCol, highlightColor);
                     if (Mouse.current.leftButton.wasPressedThisFrame)
-                    {
                         StartInspect(item, hitCol);
-                    }
                     return;
                 }
             }
         }
 
-        // Если луч ни во что интерактивное не попал — гасим подсветку
         HideHighlight();
     }
 
-    // Метод подгоняет размер и позицию подсветки ровно под размер коллайдера
     private void ShowHighlightOnCollider(Collider col, Color color)
     {
         if (_highlightBoxObj == null || col == null) return;
@@ -237,14 +260,12 @@ public class ItemInspector : MonoBehaviour
         if (_highlightRenderer != null)
             _highlightRenderer.material.color = color;
 
-        // Если это BoxCollider — берем его точные локальные размеры и поворот
         if (col is BoxCollider box)
         {
             _highlightBoxObj.transform.position = box.transform.TransformPoint(box.center);
             _highlightBoxObj.transform.rotation = box.transform.rotation;
 
             Vector3 lossy = box.transform.lossyScale;
-            // Умножаем на 1.02f, чтобы подсветка была на 2% больше модели и текстуры не мерцали
             _highlightBoxObj.transform.localScale = new Vector3(
                 Mathf.Abs(box.size.x * lossy.x),
                 Mathf.Abs(box.size.y * lossy.y),
@@ -253,7 +274,6 @@ public class ItemInspector : MonoBehaviour
         }
         else
         {
-            // Для любых других коллайдеров (Sphere, Capsule, Mesh) берем мировые границы Bounds
             Bounds b = col.bounds;
             _highlightBoxObj.transform.position = b.center;
             _highlightBoxObj.transform.rotation = Quaternion.identity;
@@ -265,9 +285,7 @@ public class ItemInspector : MonoBehaviour
     {
         _isHoveringExitZone = false;
         if (_highlightBoxObj != null && _highlightBoxObj.activeSelf)
-        {
             _highlightBoxObj.SetActive(false);
-        }
     }
 
     private void StartInspect(InspectableItem inspectData, Collider hitCol)
@@ -291,6 +309,12 @@ public class ItemInspector : MonoBehaviour
         if (_itemCollider != null) _itemCollider.enabled = false;
         if (cameraController != null) cameraController.canLook = false;
 
+        // Включаем кликабельные коллайдеры следов на время осмотра в руках
+        _currentTraceController = _currentItem.GetComponentInChildren<ProceduralSurfaceTrace>();
+        if (_currentTraceController != null)
+            _currentTraceController.SetTracesInteractable(true);
+
+        _hoveredTrace = null;
         _rotX = 0f; _rotY = 0f;
         _panOffset = Vector2.zero;
         _currentFOV = defaultFOV;
@@ -310,6 +334,10 @@ public class ItemInspector : MonoBehaviour
             _currentFOV = Mathf.Clamp(_currentFOV, maxZoomFOV, defaultFOV);
         }
         Camera.main.fieldOfView = Mathf.Lerp(Camera.main.fieldOfView, _currentFOV, Time.deltaTime * 10f);
+
+        // Фиксируем позицию нажатия ЛКМ, чтобы отличить короткий клик по крови от вращения предмета
+        if (Mouse.current.leftButton.wasPressedThisFrame)
+            _mouseDownPos = Mouse.current.position.ReadValue();
 
         bool isMouseDragging = Mouse.current.leftButton.isPressed;
         Vector2 mouseDelta = Mouse.current.delta.ReadValue();
@@ -353,23 +381,86 @@ public class ItemInspector : MonoBehaviour
                 break;
         }
 
-        EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
-        if (photo != null && photo.isAnomalous && Keyboard.current != null)
+        // Проверяем наведение и короткий клик по сгенерированным следам (кровь на кружке и т.п.)
+        CheckTraceHoverAndClick();
+
+        // Если в руках блокнот — работают клавиши билдера
+        if (_currentItem.GetComponentInChildren<PhysicalReport>() != null)
         {
-            if (Keyboard.current.enterKey.wasPressedThisFrame && photo.currentState != EvidencePhoto.DecisionState.Approved)
+            HandleNotebookControls();
+        }
+
+        // Фиксация улики: [Space] для зарисовки аномалии ИЛИ [F] для реального фото обычной улики
+        EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
+        if (photo != null && Keyboard.current != null)
+        {
+            if (photo.CanSketch && !photo.isSketched && Keyboard.current.spaceKey.wasPressedThisFrame)
             {
-                photo.MakeDecision(EvidencePhoto.DecisionState.Approved);
+                photo.MakeSketch();
             }
-            else if (Keyboard.current.backspaceKey.wasPressedThisFrame && photo.currentState != EvidencePhoto.DecisionState.Hidden)
+            else if (photo.CanTakePhoto && Keyboard.current.fKey.wasPressedThisFrame)
             {
-                photo.MakeDecision(EvidencePhoto.DecisionState.Hidden);
+                TakeEvidencePhoto(photo);
             }
         }
 
         if (Mouse.current.rightButton.wasPressedThisFrame || (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame))
         {
+            if (_currentTraceController != null)
+                _currentTraceController.SetTracesInteractable(false);
+
+            _hoveredTrace = null;
             _isInspecting = false;
             _isReturning = true;
+        }
+    }
+
+    private void CheckTraceHoverAndClick()
+    {
+        _hoveredTrace = null;
+        if (_currentTraceController == null) return;
+
+        Vector2 mousePos = Mouse.current.position.ReadValue();
+        Ray ray = Camera.main.ScreenPointToRay(mousePos);
+
+        // RaycastAll гарантирует, что мы поймаем именно след на текущем предмете
+        RaycastHit[] hits = Physics.RaycastAll(ray, 5f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
+        foreach (var hit in hits)
+        {
+            SurfaceTracePoint trace = hit.collider.GetComponent<SurfaceTracePoint>();
+            if (trace != null && trace.transform.IsChildOf(_currentItem) && trace.IsFacingCamera(Camera.main))
+            {
+                _hoveredTrace = trace;
+                break;
+            }
+        }
+
+        // Короткий клик ЛКМ (сдвиг меньше 8px) фиксирует обнаружение следа
+        if (_hoveredTrace != null && Mouse.current.leftButton.wasReleasedThisFrame)
+        {
+            if (Vector2.Distance(_mouseDownPos, mousePos) < 8f)
+            {
+                _hoveredTrace.Discover();
+            }
+        }
+    }
+
+    private void TakeEvidencePhoto(EvidencePhoto evidence)
+    {
+        if (photoCapture == null)
+        {
+            photoCapture = FindFirstObjectByType<EvidenceCameraCapture>();
+            if (photoCapture == null)
+            {
+                Debug.LogError("[ItemInspector] На сцене нет компонента EvidenceCameraCapture!");
+                return;
+            }
+        }
+
+        Texture2D snapshot = photoCapture.CaptureSquarePhoto(Camera.main);
+        if (snapshot != null)
+        {
+            evidence.ApplyCapturedPhoto(snapshot);
         }
     }
 
@@ -393,6 +484,7 @@ public class ItemInspector : MonoBehaviour
             if (_itemRigidbody != null) _itemRigidbody.isKinematic = _isKinematicState;
             if (cameraController != null) cameraController.canLook = true;
 
+            _currentTraceController = null;
             _currentItem = null;
             _isReturning = false;
         }
@@ -400,69 +492,118 @@ public class ItemInspector : MonoBehaviour
 
     private void OnGUI()
     {
-        // 1. НАДПИСЬ СНИЗУ ПРИ НАВЕДЕНИИ НА ПРОЕМ ОТКРЫТОГО ОКНА (EXIT)
+        // Белая вспышка фотоаппарата
+        if (photoCapture != null && photoCapture.CurrentFlashAlpha > 0.01f && _whiteFlashTex != null)
+        {
+            Color prev = GUI.color;
+            GUI.color = new Color(1f, 1f, 1f, photoCapture.CurrentFlashAlpha);
+            GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), _whiteFlashTex);
+            GUI.color = prev;
+        }
+
         if (_isHoveringExitZone)
         {
             GUIStyle exitStyle = new GUIStyle();
             exitStyle.fontSize = 28;
             exitStyle.normal.textColor = new Color(1f, 0.3f, 0.3f, 0.95f);
             exitStyle.alignment = TextAnchor.LowerCenter;
-
             GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 30), "Вы хотите выйти из игры?", exitStyle);
         }
 
-        // 2. Отрисовка громкости при вращении ручки радиоприемника
         if (_activeKnob != null)
         {
             GUIStyle knobStyle = new GUIStyle();
             knobStyle.fontSize = 28;
             knobStyle.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.9f);
             knobStyle.alignment = TextAnchor.LowerCenter;
-
             GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), _activeKnob.GetKnobLabel(), knobStyle);
         }
 
-        // 3. Интерфейс при осмотре улики
-        if (_isInspecting && Camera.main != null)
+        if (_isInspecting && Camera.main != null && _currentItem != null)
         {
             int zoomPercent = Mathf.RoundToInt((defaultFOV / Camera.main.fieldOfView) * 100f);
+            GUIStyle zoomStyle = new GUIStyle();
+            zoomStyle.fontSize = 28;
+            zoomStyle.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.8f);
+            zoomStyle.alignment = TextAnchor.LowerCenter;
+            GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), $"ZOOM: {zoomPercent}%", zoomStyle);
 
-            GUIStyle style = new GUIStyle();
-            style.fontSize = 28;
-            style.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.8f);
-            style.alignment = TextAnchor.LowerCenter;
-
-            GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), $"ZOOM: {zoomPercent}%", style);
-
-            if (_currentItem != null)
+            // Подсказка прямо при наведении на процедурный след (пятно крови)
+            if (_hoveredTrace != null)
             {
-                EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
-                if (photo != null)
-                {
-                    GUIStyle infoStyle = new GUIStyle();
-                    infoStyle.fontSize = 22;
-                    infoStyle.alignment = TextAnchor.UpperCenter;
+                GUIStyle traceStyle = new GUIStyle();
+                traceStyle.fontSize = 22;
+                traceStyle.alignment = TextAnchor.MiddleCenter;
+                traceStyle.normal.textColor = _hoveredTrace.isDiscovered ? Color.green : Color.yellow;
 
-                    if (!photo.isAnomalous)
+                string traceHint = _hoveredTrace.isDiscovered
+                    ? $"Обнаружено: {_hoveredTrace.traceName}"
+                    : $"[ЛКМ] Осмотреть след: {_hoveredTrace.traceName}";
+
+                GUI.Label(new Rect(0, Screen.height * 0.5f + 40, Screen.width, 40), traceHint, traceStyle);
+            }
+
+            GUIStyle infoStyle = new GUIStyle();
+            infoStyle.fontSize = 20;
+            infoStyle.alignment = TextAnchor.UpperCenter;
+
+            PhysicalReport notebook = _currentItem.GetComponentInChildren<PhysicalReport>();
+            if (notebook != null)
+            {
+                infoStyle.normal.textColor = Color.white;
+                string topHint = $"{notebook.GetPageCounterLabel()}  |  [A/D] Листать  |  [N] Новый лист";
+                if (notebook.GetActiveBuilderPage() != null)
+                    topHint += "\n[W/S] Выбор строки  |  [Q/E] Переключить значение  |  [Enter] Подписать  |  [Backspace] Вырвать";
+
+                GUI.Label(new Rect(0, 20, Screen.width, 90), topHint, infoStyle);
+                return;
+            }
+
+            EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
+            if (photo != null)
+            {
+                // Режим обычного ФОТО (кружка с кровью и т.п.)
+                if (photo.captureType == EvidencePhoto.CaptureType.Photo)
+                {
+                    if (!photo.CanTakePhoto)
                     {
-                        infoStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 0.7f);
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "Статус: Обычный снимок (Аномалий не выявлено)", infoStyle);
+                        infoStyle.normal.textColor = new Color(0.85f, 0.85f, 0.85f, 0.85f);
+                        GUI.Label(new Rect(0, 30, Screen.width, 80),
+                            $"Улика: {photo.photoName}\nОсмотрите предмет и кликните [ЛКМ] по подозрительному следу", infoStyle);
                     }
-                    else if (photo.currentState == EvidencePhoto.DecisionState.Pending)
+                    else if (!photo.isSketched)
                     {
                         infoStyle.normal.textColor = Color.yellow;
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "[!] ОБНАРУЖЕНА АНОМАЛИЯ\n[Enter] - Занести в отчет   |   [Backspace] - Утаить улику", infoStyle);
+                        GUI.Label(new Rect(0, 30, Screen.width, 80),
+                            $"СЛЕД ЗАФИКСИРОВАН: {photo.photoName}\nПодберите ракурс/зум и нажмите [F], чтобы сделать фото для отчёта", infoStyle);
                     }
-                    else if (photo.currentState == EvidencePhoto.DecisionState.Approved)
+                    else
                     {
                         infoStyle.normal.textColor = Color.green;
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "СТАТУС: ЗАФИКСИРОВАНО В ОТЧЕТЕ (+1)\n(Нажмите [Backspace], чтобы передумать и вычеркнуть из отчета)", infoStyle);
+                        GUI.Label(new Rect(0, 30, Screen.width, 80),
+                            $"ФОТО СОХРАНЕНО В БЛОКНОТ: {photo.photoName}\nОткройте блокнот ([N] новый лист) или нажмите [F], чтобы переснять", infoStyle);
                     }
-                    else if (photo.currentState == EvidencePhoto.DecisionState.Hidden)
-                    {
-                        infoStyle.normal.textColor = new Color(1f, 0.4f, 0.4f);
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "СТАТУС: УЛИКА УТАЕНА ОТ РУКОВОДСТВА\n(Нажмите [Enter], чтобы передумать и внести в отчет)", infoStyle);
-                    }
+                    return;
+                }
+
+                // Режим ЗАРИСОВКИ (аномалии)
+                if (!photo.CanSketch)
+                {
+                    infoStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 0.75f);
+                    GUI.Label(new Rect(0, 30, Screen.width, 80),
+                        $"Улика: {photo.photoName}\nВидимых отклонений пока не наблюдается.", infoStyle);
+                }
+                else if (!photo.isSketched)
+                {
+                    infoStyle.normal.textColor = Color.yellow;
+                    GUI.Label(new Rect(0, 30, Screen.width, 80),
+                        $"Улика: {photo.photoName}\nНажмите [SPACE], чтобы сохранить зарисовку в блокнот", infoStyle);
+                }
+                else
+                {
+                    infoStyle.normal.textColor = Color.green;
+                    GUI.Label(new Rect(0, 30, Screen.width, 80),
+                        $"ЗАРИСОВКА СОХРАНЕНА: {photo.photoName}\nОткройте блокнот и нажмите [N], чтобы оформить лист", infoStyle);
                 }
             }
         }

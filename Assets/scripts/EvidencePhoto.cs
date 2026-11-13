@@ -2,57 +2,126 @@ using UnityEngine;
 
 public class EvidencePhoto : MonoBehaviour
 {
-    public enum DecisionState { Pending, Approved, Hidden }
+    public enum DecisionState
+    {
+        Pending,
+        Approved,
+        Hidden,
+        Discarded
+    }
 
-    [Header("Данные для отчета")]
-    public string photoName = "Фотография двора";
+    public enum CaptureType
+    {
+        Sketch, // Для аномалий (берётся нарисованный скетч из префаба)
+        Photo   // Для НЕаномальных улик (делается реальный снимок камерой)
+    }
 
-    [Tooltip("Ставится автоматически скриптом PhotoAnomaly, когда меняется текстура")]
+    [Header("Данные улики")]
+    public string photoName = "Объект №1";
+
+    [Tooltip("Sketch — зарисовка [Space] для аномалий; Photo — фотоснимок [F] для обычных улик")]
+    public CaptureType captureType = CaptureType.Sketch;
+
+    [Tooltip("Сними галочку для обычных улик без аномалий (например, кружка с кровью)")]
+    public bool hasRealAnomaly = true;
+
+    [Tooltip("Если включено — зарисовать можно только после проявления аномалии")]
+    public bool requireAnomalyBeforeSketch = true;
+
+    [Tooltip("Если на предмете висит ProceduralSurfaceTrace — требовать сначала кликнуть по следу перед фото")]
+    public bool requireTraceClickBeforePhoto = true;
+
+    [Tooltip("Ставится автоматически скриптом PhotoAnomaly или УФ/лунным триггером")]
     public bool isAnomalous = false;
 
-    [TextArea(2, 3)]
-    public string anomalyDescription = "На заднем фоне замечен силуэт, искажающий свет.";
+    [Header("Истинный ID категории (entity / uv_trace / normal)")]
+    public string trueCategoryId = "entity";
+
+    [Header("Графика для блокнота (Зарисовка / Заглушка)")]
+    public Texture placeholderSketch;
+    public Texture realSketch;
 
     [HideInInspector]
     public DecisionState currentState = DecisionState.Pending;
 
-    // Вызывается из ItemInspector при нажатии Enter или Backspace
-    public void MakeDecision(DecisionState decision)
+    [HideInInspector]
+    public bool isSketched = false;
+
+    // Сюда кладётся живой снимок, сделанный через EvidenceCameraCapture
+    private Texture2D _runtimePhoto;
+    private ProceduralSurfaceTrace _surfaceTrace;
+
+    private void Awake()
     {
-        // Нельзя вносить в отчет или прятать фотку, пока на ней не проявилась аномалия
-        if (!isAnomalous) return;
+        _surfaceTrace = GetComponent<ProceduralSurfaceTrace>();
+        if (_surfaceTrace == null) _surfaceTrace = GetComponentInChildren<ProceduralSurfaceTrace>();
+    }
 
-        currentState = decision;
+    private void OnDestroy()
+    {
+        if (_runtimePhoto != null) Destroy(_runtimePhoto);
+    }
 
-        if (PhysicalReport.Instance != null)
+    // Можно ли сейчас сделать зарисовку [Space]
+    public bool CanSketch =>
+        captureType == CaptureType.Sketch &&
+        (!hasRealAnomaly || !requireAnomalyBeforeSketch || isAnomalous);
+
+    // Можно ли сейчас сделать реальное фото [F]
+    public bool CanTakePhoto
+    {
+        get
         {
-            if (decision == DecisionState.Approved)
-            {
-                PhysicalReport.Instance.ApproveEvidence(this);
-                Debug.Log($"[ОТЧЕТ] Улика '{photoName}' внесена в отчет (+1 аномалия).");
-            }
-            else if (decision == DecisionState.Hidden)
-            {
-                // Если раньше была в отчете, а игрок передумал — удаляем из отчета!
-                PhysicalReport.Instance.RemoveEvidence(this);
-                Debug.Log($"[ОТЧЕТ] Улика '{photoName}' утаена (изъята из отчета).");
-            }
-        }
-        else
-        {
-            Debug.LogError("На сцене не найден объект со скриптом PhysicalReport!");
+            if (captureType != CaptureType.Photo) return false;
+            if (requireTraceClickBeforePhoto && _surfaceTrace != null)
+                return _surfaceTrace.HasAnyDiscoveredTrace();
+            return true;
         }
     }
 
-    // Вызывается автоматически из PhotoAnomaly, когда поменялась картинка
+    // [Space] — зарисовка аномалии из префаба
+    public void MakeSketch()
+    {
+        if (!CanSketch || isSketched) return;
+
+        isSketched = true;
+        Debug.Log($"[ЗАРИСОВКА] '{photoName}' добавлена в банк блокнота.");
+
+        if (PhysicalReport.Instance != null)
+            PhysicalReport.Instance.RegisterSketch(this);
+    }
+
+    // [F] — сохранение реального скриншота камеры в банк блокнота (можно переснимать!)
+    public void ApplyCapturedPhoto(Texture2D capturedPhoto)
+    {
+        if (capturedPhoto == null) return;
+
+        if (_runtimePhoto != null) Destroy(_runtimePhoto);
+        _runtimePhoto = capturedPhoto;
+        isSketched = true;
+
+        Debug.Log($"[ФОТО] Снимок '{photoName}' сохранён в банк блокнота.");
+
+        if (PhysicalReport.Instance != null)
+            PhysicalReport.Instance.RegisterSketch(this);
+    }
+
+    public Texture GetCurrentSketchTexture()
+    {
+        if (captureType == CaptureType.Photo)
+            return _runtimePhoto != null ? (Texture)_runtimePhoto : placeholderSketch;
+
+        if (!isSketched || realSketch == null) return placeholderSketch;
+        return realSketch;
+    }
+
     public void BecomeAnomalous()
     {
         isAnomalous = true;
         currentState = DecisionState.Pending;
-        Debug.Log($"[АНОМАЛИЯ] Фотография '{photoName}' изменилась! Теперь доступен выбор.");
+        Debug.Log($"[АНОМАЛИЯ] На '{photoName}' проявились аномальные признаки.");
     }
 
-    // Метод-алиас для совместимости с твоими NUnit-тестами из главы 2.4
     public void MakeAnomalous()
     {
         BecomeAnomalous();

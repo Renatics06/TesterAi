@@ -25,9 +25,7 @@ public class ItemInspector : MonoBehaviour
     public float zoomSmoothness = 0.1f;
 
     [Header("Настройки подсветки по коллайдеру")]
-    [Tooltip("Цвет и прозрачность подсветки доступного предмета/области")]
     public Color highlightColor = new Color(1f, 0.95f, 0.8f, 0.14f);
-    [Tooltip("Цвет подсветки специально для проема окна (Exit)")]
     public Color exitZoneHighlightColor = new Color(1f, 0.25f, 0.25f, 0.18f);
 
     private InspectableItem _currentInspectData;
@@ -46,7 +44,6 @@ public class ItemInspector : MonoBehaviour
     private RadioVolumeKnob _activeKnob = null;
     private bool _wasCanLookBeforeKnob = true;
 
-    // Объекты для универсальной подсветки по коллайдеру
     private GameObject _highlightBoxObj;
     private MeshRenderer _highlightRenderer;
     private bool _isHoveringExitZone = false;
@@ -66,13 +63,11 @@ public class ItemInspector : MonoBehaviour
         CreateHighlightVolume();
     }
 
-    // Создаем полупрозрачный куб, который будет принимать размер любого коллайдера
     private void CreateHighlightVolume()
     {
         _highlightBoxObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
         _highlightBoxObj.name = "ColliderHighlightVolume";
 
-        // Удаляем коллайдер у самой подсветки, чтобы она не мешала лучам Raycast
         Collider col = _highlightBoxObj.GetComponent<Collider>();
         if (col != null) Destroy(col);
 
@@ -80,7 +75,6 @@ public class ItemInspector : MonoBehaviour
         _highlightRenderer.shadowCastingMode = ShadowCastingMode.Off;
         _highlightRenderer.receiveShadows = false;
 
-        // Шейдер Sprites/Default есть в любом проекте (включая URP) и поддерживает прозрачность без настроек
         Shader transShader = Shader.Find("Sprites/Default");
         if (transShader != null)
         {
@@ -148,7 +142,7 @@ public class ItemInspector : MonoBehaviour
         {
             Collider hitCol = hit.collider;
 
-            // 1. Проверяем крутилку радио
+            // 1. Крутилки радиоприемника
             RadioVolumeKnob knob = hitCol.GetComponentInParent<RadioVolumeKnob>();
             if (knob != null)
             {
@@ -165,7 +159,7 @@ public class ItemInspector : MonoBehaviour
                 return;
             }
 
-            // 2. Проверяем окно паузы или область выхода в открытом окне
+            // 2. Окно паузы и зона выхода в открытом окне
             WindowPauseMenu windowMenu = hitCol.GetComponent<WindowPauseMenu>();
             if (windowMenu == null) windowMenu = hitCol.GetComponentInParent<WindowPauseMenu>();
             if (windowMenu != null && windowMenu.CanInteract)
@@ -182,7 +176,7 @@ public class ItemInspector : MonoBehaviour
                 return;
             }
 
-            // 3. Проверяем чемодан
+            // 3. Чемодан с уликами
             SuitcaseCinematic suitcase = hitCol.GetComponentInParent<SuitcaseCinematic>();
             if (suitcase != null)
             {
@@ -194,7 +188,7 @@ public class ItemInspector : MonoBehaviour
                 return;
             }
 
-            // 4. Проверяем точки перелета камеры (MovePositionNode)
+            // 4. Точки перелета камеры (MovePositionNode)
             MovePositionNode node = hitCol.GetComponentInParent<MovePositionNode>();
             if (node != null && node.targetView != null)
             {
@@ -206,7 +200,7 @@ public class ItemInspector : MonoBehaviour
                 return;
             }
 
-            // 5. Проверяем предметы на столе (только в пределах rayDistance!)
+            // 5. Предметы на столе для осмотра в руках
             if (hit.distance <= rayDistance)
             {
                 InspectableItem item = hitCol.GetComponentInParent<InspectableItem>();
@@ -222,11 +216,9 @@ public class ItemInspector : MonoBehaviour
             }
         }
 
-        // Если луч ни во что интерактивное не попал — гасим подсветку
         HideHighlight();
     }
 
-    // Метод подгоняет размер и позицию подсветки ровно под размер коллайдера
     private void ShowHighlightOnCollider(Collider col, Color color)
     {
         if (_highlightBoxObj == null || col == null) return;
@@ -237,14 +229,12 @@ public class ItemInspector : MonoBehaviour
         if (_highlightRenderer != null)
             _highlightRenderer.material.color = color;
 
-        // Если это BoxCollider — берем его точные локальные размеры и поворот
         if (col is BoxCollider box)
         {
             _highlightBoxObj.transform.position = box.transform.TransformPoint(box.center);
             _highlightBoxObj.transform.rotation = box.transform.rotation;
 
             Vector3 lossy = box.transform.lossyScale;
-            // Умножаем на 1.02f, чтобы подсветка была на 2% больше модели и текстуры не мерцали
             _highlightBoxObj.transform.localScale = new Vector3(
                 Mathf.Abs(box.size.x * lossy.x),
                 Mathf.Abs(box.size.y * lossy.y),
@@ -253,7 +243,6 @@ public class ItemInspector : MonoBehaviour
         }
         else
         {
-            // Для любых других коллайдеров (Sphere, Capsule, Mesh) берем мировые границы Bounds
             Bounds b = col.bounds;
             _highlightBoxObj.transform.position = b.center;
             _highlightBoxObj.transform.rotation = Quaternion.identity;
@@ -303,6 +292,7 @@ public class ItemInspector : MonoBehaviour
     {
         if (_currentItem == null) return;
 
+        // ЗУМ КОЛЕСИКОМ
         float scroll = Mouse.current.scroll.ReadValue().y;
         if (Mathf.Abs(scroll) > 0.01f)
         {
@@ -353,19 +343,33 @@ public class ItemInspector : MonoBehaviour
                 break;
         }
 
+        // КОНСТРУКТОР ОТЧЕТА: ВЫБОР ЧЕРТ [Q]/[E] И ВЕРДИКТА [Enter]/[Backspace]
         EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
-        if (photo != null && photo.isAnomalous && Keyboard.current != null)
+        if (photo != null && photo.CanClassify && Keyboard.current != null)
         {
-            if (Keyboard.current.enterKey.wasPressedThisFrame && photo.currentState != EvidencePhoto.DecisionState.Approved)
+            // Q — выбрать вид проявления (Фигура / Пигменты / Рисованные линии)
+            if (Keyboard.current.qKey.wasPressedThisFrame)
+            {
+                photo.CycleManifestation();
+            }
+            // E — выбрать характер (Пассивное / Психогенное / Агрессивное появление)
+            else if (Keyboard.current.eKey.wasPressedThisFrame)
+            {
+                photo.CycleBehavior();
+            }
+            // Enter — занести в протокол как АНОМАЛИЮ (можно нажать в любой момент, даже если раньше скрыл)
+            else if (Keyboard.current.enterKey.wasPressedThisFrame)
             {
                 photo.MakeDecision(EvidencePhoto.DecisionState.Approved);
             }
-            else if (Keyboard.current.backspaceKey.wasPressedThisFrame && photo.currentState != EvidencePhoto.DecisionState.Hidden)
+            // Backspace — списать на НОРМУ / УТАИТЬ (можно нажать в любой момент, чтобы вычеркнуть аномалию из отчета)
+            else if (Keyboard.current.backspaceKey.wasPressedThisFrame)
             {
                 photo.MakeDecision(EvidencePhoto.DecisionState.Hidden);
             }
         }
 
+        // Выход из осмотра по ПКМ или Esc
         if (Mouse.current.rightButton.wasPressedThisFrame || (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame))
         {
             _isInspecting = false;
@@ -400,7 +404,6 @@ public class ItemInspector : MonoBehaviour
 
     private void OnGUI()
     {
-        // 1. НАДПИСЬ СНИЗУ ПРИ НАВЕДЕНИИ НА ПРОЕМ ОТКРЫТОГО ОКНА (EXIT)
         if (_isHoveringExitZone)
         {
             GUIStyle exitStyle = new GUIStyle();
@@ -411,7 +414,6 @@ public class ItemInspector : MonoBehaviour
             GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 30), "Вы хотите выйти из игры?", exitStyle);
         }
 
-        // 2. Отрисовка громкости при вращении ручки радиоприемника
         if (_activeKnob != null)
         {
             GUIStyle knobStyle = new GUIStyle();
@@ -422,17 +424,16 @@ public class ItemInspector : MonoBehaviour
             GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), _activeKnob.GetKnobLabel(), knobStyle);
         }
 
-        // 3. Интерфейс при осмотре улики
         if (_isInspecting && Camera.main != null)
         {
             int zoomPercent = Mathf.RoundToInt((defaultFOV / Camera.main.fieldOfView) * 100f);
 
-            GUIStyle style = new GUIStyle();
-            style.fontSize = 28;
-            style.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.8f);
-            style.alignment = TextAnchor.LowerCenter;
+            GUIStyle zoomStyle = new GUIStyle();
+            zoomStyle.fontSize = 28;
+            zoomStyle.normal.textColor = new Color(1f, 0.2f, 0.2f, 0.8f);
+            zoomStyle.alignment = TextAnchor.LowerCenter;
 
-            GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), $"ZOOM: {zoomPercent}%", style);
+            GUI.Label(new Rect(0, 0, Screen.width, Screen.height - 20), $"ZOOM: {zoomPercent}%", zoomStyle);
 
             if (_currentItem != null)
             {
@@ -440,28 +441,42 @@ public class ItemInspector : MonoBehaviour
                 if (photo != null)
                 {
                     GUIStyle infoStyle = new GUIStyle();
-                    infoStyle.fontSize = 22;
+                    infoStyle.fontSize = 20;
                     infoStyle.alignment = TextAnchor.UpperCenter;
 
-                    if (!photo.isAnomalous)
+                    // Если это настоящая аномалия, но игрок еще не покурил (текстура еще обычная)
+                    if (!photo.CanClassify)
                     {
-                        infoStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 0.7f);
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "Статус: Обычный снимок (Аномалий не выявлено)", infoStyle);
+                        infoStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 0.75f);
+                        GUI.Label(new Rect(0, 30, Screen.width, 80),
+                            $"Улика: {photo.photoName}\nВидимых отклонений пока не наблюдается.", infoStyle);
                     }
-                    else if (photo.currentState == EvidencePhoto.DecisionState.Pending)
+                    else
                     {
-                        infoStyle.normal.textColor = Color.yellow;
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "[!] ОБНАРУЖЕНА АНОМАЛИЯ\n[Enter] - Занести в отчет   |   [Backspace] - Утаить улику", infoStyle);
-                    }
-                    else if (photo.currentState == EvidencePhoto.DecisionState.Approved)
-                    {
-                        infoStyle.normal.textColor = Color.green;
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "СТАТУС: ЗАФИКСИРОВАНО В ОТЧЕТЕ (+1)\n(Нажмите [Backspace], чтобы передумать и вычеркнуть из отчета)", infoStyle);
-                    }
-                    else if (photo.currentState == EvidencePhoto.DecisionState.Hidden)
-                    {
-                        infoStyle.normal.textColor = new Color(1f, 0.4f, 0.4f);
-                        GUI.Label(new Rect(0, 40, Screen.width, 100), "СТАТУС: УЛИКА УТАЕНА ОТ РУКОВОДСТВА\n(Нажмите [Enter], чтобы передумать и внести в отчет)", infoStyle);
+                        // Выводим конструктор признаков (Q и E)
+                        string traitLine1 = $"[Q] Вид проявления: {EvidencePhoto.GetManifestationText(photo.selectedManifestation)}";
+                        string traitLine2 = $"[E] Характер: {EvidencePhoto.GetBehaviorText(photo.selectedBehavior)}";
+
+                        string verdictLine;
+                        if (photo.currentState == EvidencePhoto.DecisionState.Pending)
+                        {
+                            infoStyle.normal.textColor = Color.yellow;
+                            verdictLine = "ВЕРДИКТ НЕ ВЫНЕСЕН:  [Enter] - Занести как Аномалию   |   [Backspace] - Списать на норму / Утаить";
+                        }
+                        else if (photo.currentState == EvidencePhoto.DecisionState.Approved)
+                        {
+                            infoStyle.normal.textColor = Color.green;
+                            verdictLine = "СТАТУС: В ПРОТОКОЛЕ КАК АНОМАЛИЯ (+1)   (Нажмите [Backspace], чтобы передумать и скрыть)";
+                        }
+                        else
+                        {
+                            infoStyle.normal.textColor = new Color(1f, 0.45f, 0.45f);
+                            verdictLine = "СТАТУС: СПИСАНО НА НОРМУ / УТАЕНО   (Нажмите [Enter], чтобы передумать и внести аномалию)";
+                        }
+
+                        GUI.Label(new Rect(0, 25, Screen.width, 130),
+                            $"ПРОФИЛИРОВАНИЕ УЛИКИ: {photo.photoName}\n{traitLine1}    |    {traitLine2}\n\n{verdictLine}",
+                            infoStyle);
                     }
                 }
             }

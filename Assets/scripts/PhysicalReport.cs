@@ -7,17 +7,16 @@ public class PhysicalReport : MonoBehaviour
     public static PhysicalReport Instance;
 
     [Header("Настройки визуала")]
-    [Tooltip("Ссылка на компонент текста (TextMeshPro) на модели бланка отчета")]
+    [Tooltip("Ссылка на компонент TextMeshPro на 3D-модели бланка отчета")]
     public TMP_Text reportTextComponent;
 
-    // Список улик, которые игрок решил внести в отчет
-    private List<EvidencePhoto> _approvedEvidence = new List<EvidencePhoto>();
+    // Все улики, по которым игрок вынес вердикт (внес как аномалию или списал на норму)
+    private List<EvidencePhoto> _processedEvidence = new List<EvidencePhoto>();
 
     private void Awake()
     {
         Instance = this;
 
-        // Если забыл перетащить компонент текста в Инспекторе — найдем его сами на объекте или дочерних
         if (reportTextComponent == null)
         {
             reportTextComponent = GetComponentInChildren<TMP_Text>();
@@ -26,65 +25,114 @@ public class PhysicalReport : MonoBehaviour
         UpdatePaperText();
     }
 
-    // Добавление улики в отчет (или обновление, если уже там)
+    // Главный метод регистрации или изменения решения игрока
+    public void RegisterEvidenceDecision(EvidencePhoto photo)
+    {
+        if (photo == null) return;
+
+        if (photo.currentState == EvidencePhoto.DecisionState.Pending)
+        {
+            _processedEvidence.Remove(photo);
+        }
+        else if (!_processedEvidence.Contains(photo))
+        {
+            _processedEvidence.Add(photo);
+        }
+
+        UpdatePaperText();
+    }
+
+    // Методы-алиасы для обратной совместимости
     public void ApproveEvidence(EvidencePhoto photo)
     {
         if (photo == null) return;
-
-        if (!_approvedEvidence.Contains(photo))
-        {
-            _approvedEvidence.Add(photo);
-        }
-        UpdatePaperText();
+        photo.currentState = EvidencePhoto.DecisionState.Approved;
+        RegisterEvidenceDecision(photo);
     }
 
-    // Удаление улики из отчета (когда игрок передумал и нажал Backspace)
     public void RemoveEvidence(EvidencePhoto photo)
     {
         if (photo == null) return;
-
-        if (_approvedEvidence.Contains(photo))
-        {
-            _approvedEvidence.Remove(photo);
-        }
-        UpdatePaperText();
+        photo.currentState = EvidencePhoto.DecisionState.Hidden;
+        RegisterEvidenceDecision(photo);
     }
 
-    // Полная перерисовка текста на физическом листе бумаги
+    // Перерисовка текста на физическом листе бумаги
     public void UpdatePaperText()
     {
-        if (reportTextComponent == null)
-        {
-            Debug.LogWarning("[PhysicalReport] Не назначен reportTextComponent!");
-            return;
-        }
+        if (reportTextComponent == null) return;
 
-        string newText = "ОТЧЕТ ОБ ИНЦИДЕНТЕ\n====================\n\n";
-        int anomaliesFound = 0;
+        string newText = "ПРОТОКОЛ КРИМИНАЛИСТИЧЕСКОЙ ЭКСПЕРТИЗЫ\n======================================\n\n";
+        int anomaliesReported = 0;
+        int normalOrHiddenCount = 0;
 
-        if (_approvedEvidence.Count == 0)
+        if (_processedEvidence.Count == 0)
         {
-            newText += "Зафиксированных аномалий нет.\n\n";
+            newText += "Осмотренных улик в протоколе нет.\nВозьмите предмет и вынесите вердикт.\n\n";
         }
         else
         {
-            foreach (var ev in _approvedEvidence)
+            for (int i = 0; i < _processedEvidence.Count; i++)
             {
-                if (ev != null && ev.isAnomalous)
+                EvidencePhoto ev = _processedEvidence[i];
+                if (ev == null) continue;
+
+                newText += $"ОБЪЕКТ #{i + 1}: {ev.photoName}\n";
+
+                if (ev.currentState == EvidencePhoto.DecisionState.Approved)
                 {
-                    anomaliesFound++;
-                    newText += $"- Улика: {ev.photoName}\n";
-                    newText += $"  [!] ВИД АНОМАЛИИ: {ev.anomalyDescription}\n\n";
+                    anomaliesReported++;
+                    newText += "  [X] ВЕРДИКТ: ЗАФИКСИРОВАНА АНОМАЛИЯ\n";
+                    newText += $"   • Проявление: {EvidencePhoto.GetManifestationText(ev.selectedManifestation)}\n";
+                    newText += $"   • Характер: {EvidencePhoto.GetBehaviorText(ev.selectedBehavior)}\n";
+                    newText += $"   • Примечание: {ev.anomalyDescription}\n\n";
+                }
+                else if (ev.currentState == EvidencePhoto.DecisionState.Hidden)
+                {
+                    normalOrHiddenCount++;
+                    newText += "  [X] ВЕРДИКТ: ОТКЛОНЕНИЙ НЕ ВЫЯВЛЕНО (НОРМА)\n";
+                    newText += $"   • Заключение: {ev.normalDescription}\n\n";
                 }
             }
         }
 
-        newText += $"====================\nИТОГО АНОМАЛИЙ: {anomaliesFound}";
+        newText += "======================================\n";
+        newText += $"АНОМАЛИЙ В ОТЧЕТЕ: {anomaliesReported}  |  НОРМА/СКРЫТО: {normalOrHiddenCount}";
 
         reportTextComponent.text = newText;
-        reportTextComponent.ForceMeshUpdate(); // Принудительно обновляем 3D-меш текста в том же кадре
+        reportTextComponent.ForceMeshUpdate();
     }
 
-    // Полезный метод на будущее для ветки с существом из шкафа:
-    public int GetApprovedAnomaliesCount() => _approvedEvidence.Count;
+    // МЕТОД ДЛЯ СЮЖЕТНЫХ ВЕТОК (Существо из шкафа vs Руководство)
+    public void EvaluateReportResults(out int hiddenRealAnomalies, out int accurateProfiles, out int falseAlarms)
+    {
+        hiddenRealAnomalies = 0; // Сколько реальных аномалий игрок утаил (для ветки существа из шкафа)
+        accurateProfiles = 0;    // Сколько аномалий занесено с абсолютно точными признаками Q и E
+        falseAlarms = 0;         // Сколько раз игрок запаниковал (занес пустышку или ошибся в признаках)
+
+        foreach (var ev in _processedEvidence)
+        {
+            if (ev == null) continue;
+
+            if (ev.hasRealAnomaly && ev.isAnomalous)
+            {
+                if (ev.currentState == EvidencePhoto.DecisionState.Hidden)
+                {
+                    hiddenRealAnomalies++;
+                }
+                else if (ev.currentState == EvidencePhoto.DecisionState.Approved)
+                {
+                    if (ev.IsClassificationAccurate()) accurateProfiles++;
+                    else falseAlarms++;
+                }
+            }
+            else if (!ev.hasRealAnomaly)
+            {
+                if (ev.currentState == EvidencePhoto.DecisionState.Approved)
+                {
+                    falseAlarms++; // Занес обычное пятно кофе как паранормальщину
+                }
+            }
+        }
+    }
 }

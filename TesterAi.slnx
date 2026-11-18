@@ -1,0 +1,8 @@
+﻿<Solution>
+  <Project Path="Renatics06.Test.Editor.Tests.csproj" />
+  <Project Path="Assembly-CSharp.csproj" />
+  <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="Renatics06.Test.Tests.csproj" />
+  <Project Path="Renatics06.Test.csproj" />
+  <Project Path="Renatics06.Test.Editor.csproj" />
+</Solution>

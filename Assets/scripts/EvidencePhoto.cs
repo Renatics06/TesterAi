@@ -4,145 +4,122 @@ public class EvidencePhoto : MonoBehaviour
 {
     public enum DecisionState
     {
-        Pending,  // Не занесено в блокнот
-        Approved, // Занесено в блокнот как улика
-        Discarded // Вырвано / Выброшено из блокнота
+        Pending,
+        Approved,
+        Hidden,
+        Discarded
     }
 
-    // Расширенные оси характеристик зарисовки
-    public enum FormDistortion { None, Normal, Warped, Fragmented }
-    public enum SurfaceTexture { None, Dry, Oily, BioGrowth, Charred }
-    public enum AnomalyCore { None, Figure, Symbols, OrganicAnatomy }
-    public enum AnomalyBehavior { None, Static, Psychogenic, Invasive }
+    public enum CaptureType
+    {
+        Sketch, // Для аномалий (берётся нарисованный скетч из префаба)
+        Photo   // Для НЕаномальных улик (делается реальный снимок камерой)
+    }
 
     [Header("Данные улики")]
-    public string photoName = "Объект №1 (Фотография)";
-    public bool hasRealAnomaly = true;
-    public bool isAnomalous = false; // Становится true после триггера (например, курения)
+    public string photoName = "Объект №1";
 
-    [Header("Графика для блокнота (Зарисовка)")]
-    [Tooltip("Текстура-заглушка на странице до того, как сделан скетч")]
+    [Tooltip("Sketch — зарисовка [Space] для аномалий; Photo — фотоснимок [F] для обычных улик")]
+    public CaptureType captureType = CaptureType.Sketch;
+
+    [Tooltip("Сними галочку для обычных улик без аномалий (например, кружка с кровью)")]
+    public bool hasRealAnomaly = true;
+
+    [Tooltip("Если включено — зарисовать можно только после проявления аномалии")]
+    public bool requireAnomalyBeforeSketch = true;
+
+    [Tooltip("Если на предмете висит ProceduralSurfaceTrace — требовать сначала кликнуть по следу перед фото")]
+    public bool requireTraceClickBeforePhoto = true;
+
+    [Tooltip("Ставится автоматически скриптом PhotoAnomaly или УФ/лунным триггером")]
+    public bool isAnomalous = false;
+
+    [Header("Истинный ID категории (entity / uv_trace / normal)")]
+    public string trueCategoryId = "entity";
+
+    [Header("Графика для блокнота (Зарисовка / Заглушка)")]
     public Texture placeholderSketch;
-    [Tooltip("Финальная зарисовка от руки (чертёж/скетч аномалии)")]
     public Texture realSketch;
 
-    [Header("Истинные характеристики (для проверки)")]
-    public FormDistortion trueForm = FormDistortion.Warped;
-    public SurfaceTexture trueTexture = SurfaceTexture.BioGrowth;
-    public AnomalyCore trueCore = AnomalyCore.Figure;
-    public AnomalyBehavior trueBehavior = AnomalyBehavior.Invasive;
-
-    [Header("Тексты для отчета")]
-    [TextArea(2, 3)]
-    public string anomalyDescription = "На зарисовке зафиксирован деформированный силуэт.";
-    [TextArea(2, 3)]
-    public string normalDescription = "Штатный объект без аномальных отклонений.";
-
-    [Header("Выбор игрока (в рантайме)")]
+    [HideInInspector]
     public DecisionState currentState = DecisionState.Pending;
+
+    [HideInInspector]
     public bool isSketched = false;
 
-    // Выбранные игроком характеристики в блокноте
-    public FormDistortion selectedForm = FormDistortion.None;
-    public SurfaceTexture selectedTexture = SurfaceTexture.Dry;
-    public AnomalyCore selectedCore = AnomalyCore.None;
-    public AnomalyBehavior selectedBehavior = AnomalyBehavior.None;
+    // Сюда кладётся живой снимок, сделанный через EvidenceCameraCapture
+    private Texture2D _runtimePhoto;
+    private ProceduralSurfaceTrace _surfaceTrace;
 
-    // Метод зарисовки (нажатие пробела при осмотре)
+    private void Awake()
+    {
+        _surfaceTrace = GetComponent<ProceduralSurfaceTrace>();
+        if (_surfaceTrace == null) _surfaceTrace = GetComponentInChildren<ProceduralSurfaceTrace>();
+    }
+
+    private void OnDestroy()
+    {
+        if (_runtimePhoto != null) Destroy(_runtimePhoto);
+    }
+
+    // Можно ли сейчас сделать зарисовку [Space]
+    public bool CanSketch =>
+        captureType == CaptureType.Sketch &&
+        (!hasRealAnomaly || !requireAnomalyBeforeSketch || isAnomalous);
+
+    // Можно ли сейчас сделать реальное фото [F]
+    public bool CanTakePhoto
+    {
+        get
+        {
+            if (captureType != CaptureType.Photo) return false;
+            if (requireTraceClickBeforePhoto && _surfaceTrace != null)
+                return _surfaceTrace.HasAnyDiscoveredTrace();
+            return true;
+        }
+    }
+
+    // [Space] — зарисовка аномалии из префаба
     public void MakeSketch()
     {
-        if (isSketched) return;
+        if (!CanSketch || isSketched) return;
+
         isSketched = true;
-        Debug.Log($"[БЛОКНОТ] Сделана зарисовка объекта: {photoName}");
+        Debug.Log($"[ЗАРИСОВКА] '{photoName}' добавлена в банк блокнота.");
 
         if (PhysicalReport.Instance != null)
-        {
-            PhysicalReport.Instance.AddOrUpdatePage(this);
-        }
+            PhysicalReport.Instance.RegisterSketch(this);
     }
 
-    // Циклическое переключение характеристик по клавишам
-    public void CycleForm()
+    // [F] — сохранение реального скриншота камеры в банк блокнота (можно переснимать!)
+    public void ApplyCapturedPhoto(Texture2D capturedPhoto)
     {
-        if (!isSketched) return;
-        selectedForm = (FormDistortion)(((int)selectedForm + 1) % 4);
-        UpdateReport();
-    }
+        if (capturedPhoto == null) return;
 
-    public void CycleTexture()
-    {
-        if (!isSketched) return;
-        selectedTexture = (SurfaceTexture)(((int)selectedTexture + 1) % 5);
-        UpdateReport();
-    }
+        if (_runtimePhoto != null) Destroy(_runtimePhoto);
+        _runtimePhoto = capturedPhoto;
+        isSketched = true;
 
-    public void CycleCore()
-    {
-        if (!isSketched) return;
-        selectedCore = (AnomalyCore)(((int)selectedCore + 1) % 4);
-        UpdateReport();
-    }
+        Debug.Log($"[ФОТО] Снимок '{photoName}' сохранён в банк блокнота.");
 
-    public void CycleBehavior()
-    {
-        if (!isSketched) return;
-        selectedBehavior = (AnomalyBehavior)(((int)selectedBehavior + 1) % 4);
-        UpdateReport();
-    }
-
-    private void UpdateReport()
-    {
-        if (currentState == DecisionState.Approved && PhysicalReport.Instance != null)
-        {
-            PhysicalReport.Instance.UpdateNotebookText();
-        }
+        if (PhysicalReport.Instance != null)
+            PhysicalReport.Instance.RegisterSketch(this);
     }
 
     public Texture GetCurrentSketchTexture()
     {
+        if (captureType == CaptureType.Photo)
+            return _runtimePhoto != null ? (Texture)_runtimePhoto : placeholderSketch;
+
         if (!isSketched || realSketch == null) return placeholderSketch;
         return realSketch;
     }
 
-    // Автоматические методы для вывода текста в UI (больше не вызовут ошибок об отсутствии методов)
-    public static string GetFormText(FormDistortion f) => f switch
-    {
-        FormDistortion.Normal => "Норма (Без деформаций)",
-        FormDistortion.Warped => "Искривление / Плывущая форма",
-        FormDistortion.Fragmented => "Фрагментация / Разрыв",
-        _ => "[Не выбрано - Нажмите клавишу]"
-    };
-
-    public static string GetTextureText(SurfaceTexture s) => s switch
-    {
-        SurfaceTexture.Dry => "Сухая поверхность",
-        SurfaceTexture.Oily => "Маслянистая пленка / Конденсат",
-        SurfaceTexture.BioGrowth => "Био-поражение (Плесень/Налет)",
-        SurfaceTexture.Charred => "Следы термического ожога",
-        _ => "[Не выбрано - Нажмите клавишу]"
-    };
-
-    public static string GetCoreText(AnomalyCore c) => c switch
-    {
-        AnomalyCore.Figure => "Антропоморфный силуэт",
-        AnomalyCore.Symbols => "Нацарапанные символы / Знаки",
-        AnomalyCore.OrganicAnatomy => "Органические ткани / Элементы",
-        _ => "[Не выбрано - Нажмите клавишу]"
-    };
-
-    public static string GetBehaviorText(AnomalyBehavior b) => b switch
-    {
-        AnomalyBehavior.Static => "Статичное (Остаточное)",
-        AnomalyBehavior.Psychogenic => "Психогенное (Реакция на разум)",
-        AnomalyBehavior.Invasive => "Агрессивное / Инвазивное",
-        _ => "[Не выбрано - Нажмите клавишу]"
-    };
-
-    // Методы для совместимости со старыми вызовами
     public void BecomeAnomalous()
     {
         isAnomalous = true;
-        Debug.Log($"[АНОМАЛИЯ] Улика '{photoName}' проявила аномальные свойства.");
+        currentState = DecisionState.Pending;
+        Debug.Log($"[АНОМАЛИЯ] На '{photoName}' проявились аномальные признаки.");
     }
 
     public void MakeAnomalous()

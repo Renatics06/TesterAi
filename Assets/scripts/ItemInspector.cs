@@ -110,6 +110,27 @@ public class ItemInspector : MonoBehaviour
         else
         {
             CheckHoverAndClick();
+            HandleNotebookControls();
+        }
+    }
+
+    // Управление страницами блокнота (когда игрок смотрит на стол/блокнот и не держит улику)
+    private void HandleNotebookControls()
+    {
+        if (PhysicalReport.Instance == null || Keyboard.current == null || WindowPauseMenu.IsGamePaused)
+            return;
+
+        if (Keyboard.current.dKey.wasPressedThisFrame || Keyboard.current.rightArrowKey.wasPressedThisFrame)
+        {
+            PhysicalReport.Instance.NextPage();
+        }
+        else if (Keyboard.current.aKey.wasPressedThisFrame || Keyboard.current.leftArrowKey.wasPressedThisFrame)
+        {
+            PhysicalReport.Instance.PrevPage();
+        }
+        else if (Keyboard.current.backspaceKey.wasPressedThisFrame)
+        {
+            PhysicalReport.Instance.DiscardCurrentPage();
         }
     }
 
@@ -343,29 +364,33 @@ public class ItemInspector : MonoBehaviour
                 break;
         }
 
-        // КОНСТРУКТОР ОТЧЕТА: ВЫБОР ЧЕРТ [Q]/[E] И ВЕРДИКТА [Enter]/[Backspace]
-        EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
-        if (photo != null && photo.CanClassify && Keyboard.current != null)
+        // Если в руках сам блокнот — разрешаем листать и вырывать страницы
+        if (_currentItem.GetComponentInChildren<PhysicalReport>() != null)
         {
-            // Q — выбрать вид проявления (Фигура / Пигменты / Рисованные линии)
-            if (Keyboard.current.qKey.wasPressedThisFrame)
+            HandleNotebookControls();
+        }
+
+        // ЛОГИКА ЗАРИСОВКИ И ЧЕК-ЛИСТА УЛИКИ
+        EvidencePhoto photo = _currentItem.GetComponentInChildren<EvidencePhoto>();
+        if (photo != null && Keyboard.current != null)
+        {
+            bool canSketch = !photo.hasRealAnomaly || photo.isAnomalous;
+
+            if (canSketch)
             {
-                photo.CycleManifestation();
-            }
-            // E — выбрать характер (Пассивное / Психогенное / Агрессивное появление)
-            else if (Keyboard.current.eKey.wasPressedThisFrame)
-            {
-                photo.CycleBehavior();
-            }
-            // Enter — занести в протокол как АНОМАЛИЮ (можно нажать в любой момент, даже если раньше скрыл)
-            else if (Keyboard.current.enterKey.wasPressedThisFrame)
-            {
-                photo.MakeDecision(EvidencePhoto.DecisionState.Approved);
-            }
-            // Backspace — списать на НОРМУ / УТАИТЬ (можно нажать в любой момент, чтобы вычеркнуть аномалию из отчета)
-            else if (Keyboard.current.backspaceKey.wasPressedThisFrame)
-            {
-                photo.MakeDecision(EvidencePhoto.DecisionState.Hidden);
+                // [Space] — сделать зарисовку и добавить страницу в блокнот
+                if (!photo.isSketched && Keyboard.current.spaceKey.wasPressedThisFrame)
+                {
+                    photo.MakeSketch();
+                }
+                // После зарисовки можно заполнять чек-лист (Q / W / E / R)
+                else if (photo.isSketched && photo.currentState == EvidencePhoto.DecisionState.Approved)
+                {
+                    if (Keyboard.current.qKey.wasPressedThisFrame) photo.CycleForm();
+                    else if (Keyboard.current.wKey.wasPressedThisFrame) photo.CycleTexture();
+                    else if (Keyboard.current.eKey.wasPressedThisFrame) photo.CycleCore();
+                    else if (Keyboard.current.rKey.wasPressedThisFrame) photo.CycleBehavior();
+                }
             }
         }
 
@@ -444,39 +469,34 @@ public class ItemInspector : MonoBehaviour
                     infoStyle.fontSize = 20;
                     infoStyle.alignment = TextAnchor.UpperCenter;
 
-                    // Если это настоящая аномалия, но игрок еще не покурил (текстура еще обычная)
-                    if (!photo.CanClassify)
+                    bool canSketch = !photo.hasRealAnomaly || photo.isAnomalous;
+
+                    if (!canSketch)
                     {
                         infoStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 0.75f);
                         GUI.Label(new Rect(0, 30, Screen.width, 80),
                             $"Улика: {photo.photoName}\nВидимых отклонений пока не наблюдается.", infoStyle);
                     }
+                    else if (!photo.isSketched)
+                    {
+                        infoStyle.normal.textColor = Color.yellow;
+                        GUI.Label(new Rect(0, 30, Screen.width, 80),
+                            $"ОБНАРУЖЕНА УЛИКА: {photo.photoName}\nНажмите [SPACE], чтобы сделать зарисовку в блокнот", infoStyle);
+                    }
+                    else if (photo.currentState == EvidencePhoto.DecisionState.Discarded)
+                    {
+                        infoStyle.normal.textColor = new Color(1f, 0.45f, 0.45f);
+                        GUI.Label(new Rect(0, 30, Screen.width, 80),
+                            $"Улика: {photo.photoName}\nСТАТУС: СТРАНИЦА ВЫРВАНА ИЗ БЛОКНОТА", infoStyle);
+                    }
                     else
                     {
-                        // Выводим конструктор признаков (Q и E)
-                        string traitLine1 = $"[Q] Вид проявления: {EvidencePhoto.GetManifestationText(photo.selectedManifestation)}";
-                        string traitLine2 = $"[E] Характер: {EvidencePhoto.GetBehaviorText(photo.selectedBehavior)}";
+                        infoStyle.normal.textColor = Color.green;
+                        string line1 = $"[Q] Форма: {EvidencePhoto.GetFormText(photo.selectedForm)}   |   [W] Поверхность: {EvidencePhoto.GetTextureText(photo.selectedTexture)}";
+                        string line2 = $"[E] Ядро: {EvidencePhoto.GetCoreText(photo.selectedCore)}   |   [R] Поведение: {EvidencePhoto.GetBehaviorText(photo.selectedBehavior)}";
 
-                        string verdictLine;
-                        if (photo.currentState == EvidencePhoto.DecisionState.Pending)
-                        {
-                            infoStyle.normal.textColor = Color.yellow;
-                            verdictLine = "ВЕРДИКТ НЕ ВЫНЕСЕН:  [Enter] - Занести как Аномалию   |   [Backspace] - Списать на норму / Утаить";
-                        }
-                        else if (photo.currentState == EvidencePhoto.DecisionState.Approved)
-                        {
-                            infoStyle.normal.textColor = Color.green;
-                            verdictLine = "СТАТУС: В ПРОТОКОЛЕ КАК АНОМАЛИЯ (+1)   (Нажмите [Backspace], чтобы передумать и скрыть)";
-                        }
-                        else
-                        {
-                            infoStyle.normal.textColor = new Color(1f, 0.45f, 0.45f);
-                            verdictLine = "СТАТУС: СПИСАНО НА НОРМУ / УТАЕНО   (Нажмите [Enter], чтобы передумать и внести аномалию)";
-                        }
-
-                        GUI.Label(new Rect(0, 25, Screen.width, 130),
-                            $"ПРОФИЛИРОВАНИЕ УЛИКИ: {photo.photoName}\n{traitLine1}    |    {traitLine2}\n\n{verdictLine}",
-                            infoStyle);
+                        GUI.Label(new Rect(0, 20, Screen.width, 130),
+                            $"ЗАРИСОВАНО В БЛОКНОТ: {photo.photoName}\n{line1}\n{line2}", infoStyle);
                     }
                 }
             }

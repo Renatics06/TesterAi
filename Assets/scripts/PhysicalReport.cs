@@ -1,138 +1,138 @@
 using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
+using UnityEngine.UI;
 
 public class PhysicalReport : MonoBehaviour
 {
     public static PhysicalReport Instance;
 
-    [Header("Настройки визуала")]
-    [Tooltip("Ссылка на компонент TextMeshPro на 3D-модели бланка отчета")]
-    public TMP_Text reportTextComponent;
+    [Header("Ссылки на элементы 3D-блокнота")]
+    [Tooltip("Основной текстовый компонент на странице отчета (TextMeshPro)")]
+    public TMP_Text notebookTextComponent;
 
-    // Все улики, по которым игрок вынес вердикт (внес как аномалию или списал на норму)
-    private List<EvidencePhoto> _processedEvidence = new List<EvidencePhoto>();
+    [Tooltip("UI Image для вывода текстуры-зарисовки текущей страницы")]
+    public RawImage sketchDisplayImage;
+
+    [Header("Корпоративный контент (Статичные страницы)")]
+    [TextArea(4, 6)]
+    public string corporateHeader = "ЕВРОПЕЙСКИЙ ЦЕНТР АНОМАЛЬНЫХ ИССЛЕДОВАНИЙ (ЕЦАИ)\nДЕПАРТАМЕНТ КОНТРОЛЯ УЛИК И СРЕДЫ\n\nВНИМАНИЕ: Все обнаруженные аномалии подлежат строгому учету. Прямой зрительный контакт с незащищенными образцами запрещен. Используйте метод полевой зарисовки.";
+
+    [TextArea(5, 8)]
+    public string investigatorNotes = "ЗАПИСКИ ПРЕДШЕСТВЕННИКА (СЛЕДОВАТЕЛЬ Р. ВАН ТЕЛЬ):\n'14 ноября. Они здесь везде. Этот чемодан... нельзя открывать до конца. Тот, что в шкафу, стучит по ночам. Если руководство спросит про пятна на фотографиях — пишите, что это влажность. Делайте только скетчи, не смотрите на них долго...'";
+
+    private List<EvidencePhoto> _notebookPages = new List<EvidencePhoto>();
+    private int _currentPageIndex = 0;
 
     private void Awake()
     {
         Instance = this;
+        if (notebookTextComponent == null)
+            notebookTextComponent = GetComponentInChildren<TMP_Text>();
 
-        if (reportTextComponent == null)
-        {
-            reportTextComponent = GetComponentInChildren<TMP_Text>();
-        }
-
-        UpdatePaperText();
+        UpdateNotebookText();
     }
 
-    // Главный метод регистрации или изменения решения игрока
-    public void RegisterEvidenceDecision(EvidencePhoto photo)
+    public void AddOrUpdatePage(EvidencePhoto photo)
     {
         if (photo == null) return;
 
-        if (photo.currentState == EvidencePhoto.DecisionState.Pending)
+        if (!_notebookPages.Contains(photo))
         {
-            _processedEvidence.Remove(photo);
+            _notebookPages.Add(photo);
+            photo.currentState = EvidencePhoto.DecisionState.Approved;
+            _currentPageIndex = _notebookPages.Count + 1;
         }
-        else if (!_processedEvidence.Contains(photo))
+        UpdateNotebookText();
+    }
+
+    public void DiscardCurrentPage()
+    {
+        if (_currentPageIndex < 2 || _notebookPages.Count == 0) return;
+
+        int evidenceIndex = _currentPageIndex - 2;
+        if (evidenceIndex < _notebookPages.Count)
         {
-            _processedEvidence.Add(photo);
+            EvidencePhoto photo = _notebookPages[evidenceIndex];
+            photo.currentState = EvidencePhoto.DecisionState.Discarded;
+            _notebookPages.RemoveAt(evidenceIndex);
+
+            _currentPageIndex = Mathf.Clamp(_currentPageIndex - 1, 0, _notebookPages.Count + 1);
+            UpdateNotebookText();
+            Debug.Log("[БЛОКНОТ] Страница с уликой была вырвана и выброшена.");
         }
-
-        UpdatePaperText();
     }
 
-    // Методы-алиасы для обратной совместимости
-    public void ApproveEvidence(EvidencePhoto photo)
+    public void NextPage()
     {
-        if (photo == null) return;
-        photo.currentState = EvidencePhoto.DecisionState.Approved;
-        RegisterEvidenceDecision(photo);
+        int maxPages = _notebookPages.Count + 1;
+        _currentPageIndex = Mathf.Min(_currentPageIndex + 1, maxPages);
+        UpdateNotebookText();
     }
 
-    public void RemoveEvidence(EvidencePhoto photo)
+    public void PrevPage()
     {
-        if (photo == null) return;
-        photo.currentState = EvidencePhoto.DecisionState.Hidden;
-        RegisterEvidenceDecision(photo);
+        _currentPageIndex = Mathf.Max(_currentPageIndex - 1, 0);
+        UpdateNotebookText();
     }
 
-    // Перерисовка текста на физическом листе бумаги
-    public void UpdatePaperText()
+    public void UpdateNotebookText()
     {
-        if (reportTextComponent == null) return;
+        if (notebookTextComponent == null) return;
 
-        string newText = "ПРОТОКОЛ КРИМИНАЛИСТИЧЕСКОЙ ЭКСПЕРТИЗЫ\n======================================\n\n";
-        int anomaliesReported = 0;
-        int normalOrHiddenCount = 0;
+        string pageContent = "";
 
-        if (_processedEvidence.Count == 0)
+        if (_currentPageIndex == 0)
         {
-            newText += "Осмотренных улик в протоколе нет.\nВозьмите предмет и вынесите вердикт.\n\n";
+            pageContent = $"[СТРАНИЦА 1 / ОБЩЕЕ]\n\n{corporateHeader}\n\n--- [Листать далее ->] ---";
+            HideSketchUI();
+        }
+        else if (_currentPageIndex == 1)
+        {
+            pageContent = $"[СТРАНИЦА 2 / ЖУРНАЛ СЛЕДОВАТЕЛЯ]\n\n{investigatorNotes}\n\n--- [<-- Листать назад / Далее ->] ---";
+            HideSketchUI();
         }
         else
         {
-            for (int i = 0; i < _processedEvidence.Count; i++)
+            int evidenceIndex = _currentPageIndex - 2;
+            if (evidenceIndex < _notebookPages.Count)
             {
-                EvidencePhoto ev = _processedEvidence[i];
-                if (ev == null) continue;
+                EvidencePhoto ev = _notebookPages[evidenceIndex];
 
-                newText += $"ОБЪЕКТ #{i + 1}: {ev.photoName}\n";
+                pageContent = $"[ДЕЛО УЛИКА #{evidenceIndex + 1}: {ev.photoName}]\n";
+                pageContent += $" СТАТУС СКЕТЧА: {(ev.isSketched ? "[ЗАРИСОВАНО]" : "[ПУСТО]")}\n\n";
 
-                if (ev.currentState == EvidencePhoto.DecisionState.Approved)
+                if (ev.isSketched)
                 {
-                    anomaliesReported++;
-                    newText += "  [X] ВЕРДИКТ: ЗАФИКСИРОВАНА АНОМАЛИЯ\n";
-                    newText += $"   • Проявление: {EvidencePhoto.GetManifestationText(ev.selectedManifestation)}\n";
-                    newText += $"   • Характер: {EvidencePhoto.GetBehaviorText(ev.selectedBehavior)}\n";
-                    newText += $"   • Примечание: {ev.anomalyDescription}\n\n";
+                    pageContent += $"• Форма: {EvidencePhoto.GetFormText(ev.selectedForm)}\n";
+                    pageContent += $"• Поверхность: {EvidencePhoto.GetTextureText(ev.selectedTexture)}\n";
+                    pageContent += $"• Ядро: {EvidencePhoto.GetCoreText(ev.selectedCore)}\n";
+                    pageContent += $"• Поведение: {EvidencePhoto.GetBehaviorText(ev.selectedBehavior)}\n\n";
+                    pageContent += "[BACKSPACE] — Вырвать/выбросить страницу из блокнота";
                 }
-                else if (ev.currentState == EvidencePhoto.DecisionState.Hidden)
-                {
-                    normalOrHiddenCount++;
-                    newText += "  [X] ВЕРДИКТ: ОТКЛОНЕНИЙ НЕ ВЫЯВЛЕНО (НОРМА)\n";
-                    newText += $"   • Заключение: {ev.normalDescription}\n\n";
-                }
+
+                ShowSketchUI(ev.GetCurrentSketchTexture());
             }
         }
 
-        newText += "======================================\n";
-        newText += $"АНОМАЛИЙ В ОТЧЕТЕ: {anomaliesReported}  |  НОРМА/СКРЫТО: {normalOrHiddenCount}";
-
-        reportTextComponent.text = newText;
-        reportTextComponent.ForceMeshUpdate();
+        notebookTextComponent.text = pageContent;
+        notebookTextComponent.ForceMeshUpdate();
     }
 
-    // МЕТОД ДЛЯ СЮЖЕТНЫХ ВЕТОК (Существо из шкафа vs Руководство)
-    public void EvaluateReportResults(out int hiddenRealAnomalies, out int accurateProfiles, out int falseAlarms)
+    private void ShowSketchUI(Texture tex)
     {
-        hiddenRealAnomalies = 0; // Сколько реальных аномалий игрок утаил (для ветки существа из шкафа)
-        accurateProfiles = 0;    // Сколько аномалий занесено с абсолютно точными признаками Q и E
-        falseAlarms = 0;         // Сколько раз игрок запаниковал (занес пустышку или ошибся в признаках)
-
-        foreach (var ev in _processedEvidence)
+        if (sketchDisplayImage != null)
         {
-            if (ev == null) continue;
+            sketchDisplayImage.gameObject.SetActive(true);
+            sketchDisplayImage.texture = tex;
+        }
+    }
 
-            if (ev.hasRealAnomaly && ev.isAnomalous)
-            {
-                if (ev.currentState == EvidencePhoto.DecisionState.Hidden)
-                {
-                    hiddenRealAnomalies++;
-                }
-                else if (ev.currentState == EvidencePhoto.DecisionState.Approved)
-                {
-                    if (ev.IsClassificationAccurate()) accurateProfiles++;
-                    else falseAlarms++;
-                }
-            }
-            else if (!ev.hasRealAnomaly)
-            {
-                if (ev.currentState == EvidencePhoto.DecisionState.Approved)
-                {
-                    falseAlarms++; // Занес обычное пятно кофе как паранормальщину
-                }
-            }
+    private void HideSketchUI()
+    {
+        if (sketchDisplayImage != null)
+        {
+            sketchDisplayImage.gameObject.SetActive(false);
         }
     }
 }
